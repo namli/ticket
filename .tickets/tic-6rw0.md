@@ -32,3 +32,7 @@ Blocked by tic-zmz1: plugin names and whether they shadow `tk start` / `tk reope
 **2026-09-17T15:15:00Z**
 
 Guard style decided in tic-zmz1: option A - plugins/ticket-start and plugins/ticket-reopen shadow built-in 'tk start' / 'tk reopen'. Reason: plugin dispatch (ticket:1334) checks PATH before built-ins, so shadowing needs no core change and keeps the fork mergeable with upstream wedow/ticket; an agent typing the built-in name from habit still hits the guard; escape hatches are 'tk super <cmd>' and --force. Caveat: the guard exists only where the plugins are on PATH, so the skill must fail loudly when they are missing (see tic-x75b).
+
+**2026-09-17T15:23:06Z**
+
+Design update from tic-5lpp: the re-blocked dependents are the 'ready' lines of 'tk impact --porcelain <id>' taken while the ticket is still closed. Spec: docs/superpowers/specs/2026-09-17-ticket-impact-design.md
