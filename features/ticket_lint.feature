@@ -221,3 +221,40 @@ Feature: Ticket Lint
     When I run "ticket lint"
     Then the exit code should be 0
     And the output should be empty
+
+  # --- Convention rules ---
+
+  Scenario: Convention rules are silent by default
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And a ticket exists with ID "lint-0002" and title "Second"
+    And ticket "lint-0002" depends on "lint-0001"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint"
+    Then the exit code should be 0
+    And the output should be empty
+
+  Scenario: Conventions flag reports missing notes
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And a ticket exists with ID "lint-0002" and title "Second"
+    And a ticket exists with ID "lint-0003" and title "Third"
+    And ticket "lint-0003" depends on "lint-0002"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint --conventions"
+    Then the exit code should be 0
+    And the output line count should be 2
+    And the output line 1 should contain ".tickets/lint-0001.md:1: warning:"
+    And the output line 1 should contain "[close-note]"
+    And the output line 2 should contain ".tickets/lint-0003.md:4: warning:"
+    And the output line 2 should contain "[dep-note]"
+
+  Scenario: Convention notes silence the convention rules
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And a ticket exists with ID "lint-0002" and title "Second"
+    And a ticket exists with ID "lint-0003" and title "Third"
+    And ticket "lint-0003" depends on "lint-0002"
+    And ticket "lint-0003" has a note "Blocked by lint-0002: needs the API first"
+    And ticket "lint-0001" has a note "Closed: done - shipped"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint --conventions --strict"
+    Then the exit code should be 0
+    And the output should be empty

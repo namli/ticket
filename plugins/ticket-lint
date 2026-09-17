@@ -64,6 +64,12 @@ fm == 1 && /^[a-zA-Z][a-zA-Z_-]*:/ {
     }
     next
 }
+fm == 2 && /^## / { in_notes = ($0 ~ /^## Notes[ \t]*$/); next }
+fm == 2 && in_notes && /^Closed: / { closed_note[cur] = 1 }
+fm == 2 && in_notes && /^Blocked by [^:]+:/ {
+    who = substr($0, 12, index($0, ":") - 12)
+    blocked_note[cur, who] = 1
+}
 
 # --- Reporting ---
 function emit(id, ln, level, rule, msg) {
@@ -194,6 +200,22 @@ function check_parents(    f, id, p, steps) {
     }
 }
 
+function check_conventions(    f, id, i, d) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        if (is_closed(id)) {
+            if (!(id in closed_note))
+                emit(id, 1, "warning", "close-note", "closed without a \"Closed: <resolution>\" note")
+            continue
+        }
+        for (i = 1; i <= ndeps[id]; i++) {
+            d = dep[id, i]
+            if (d != id && (d in exists) && !((id, d) in blocked_note))
+                emit(id, line[id, "deps"], "warning", "dep-note", "no \"Blocked by " d ": <reason>\" note")
+        }
+    }
+}
+
 END {
     check_ids()
     check_fields()
@@ -202,6 +224,7 @@ END {
     check_state()
     check_links()
     check_parents()
+    if (conventions) check_conventions()
     if (errors + warnings > 0)
         print plural(errors + 0, "error") ", " plural(warnings + 0, "warning") | "cat 1>&2"
     exit (errors > 0 || (strict && warnings > 0)) ? 1 : 0
