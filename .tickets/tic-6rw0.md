@@ -1,6 +1,6 @@
 ---
 id: tic-6rw0
-status: open
+status: in_progress
 deps: [tic-zmz1]
 links: []
 created: 2026-09-17T11:29:13Z
@@ -36,3 +36,7 @@ Guard style decided in tic-zmz1: option A - plugins/ticket-start and plugins/tic
 **2026-09-17T15:23:06Z**
 
 Design update from tic-5lpp: the re-blocked dependents are the 'ready' lines of 'tk impact --porcelain <id>' taken while the ticket is still closed. Spec: docs/superpowers/specs/2026-09-17-ticket-impact-design.md
+
+**2026-09-17T16:56:25Z**
+
+Design decisions (spec docs/superpowers/specs/2026-09-17-ticket-start-reopen-guard-design.md): two files, both thin consumers of 'tk impact --porcelain' (status / blocker / ready lines), IDs resolved through 'tk super show'; 'tk start' on a closed ticket is always refused and points to 'tk reopen -m <reason> --in-progress' (--force does not override it); --force on start overrides open blockers and writes a 'Forced start: open blockers ...' note; 'tk reopen --in-progress' applies the same blocker guard, --force overrides it and adds a 'Forced: ...' second line to the Reopened note; plain reopen is never refused; reopen of a non-closed ticket -> exit 0, no note, status untouched.
