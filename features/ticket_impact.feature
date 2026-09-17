@@ -185,3 +185,62 @@ Feature: Ticket Impact
     And the output should contain "Already closed. Reopening would re-block:"
     And the output should contain "- imp-0002 [open] Waiting"
     And the output should not contain "Becomes ready:"
+
+  # --- Porcelain ---
+
+  Scenario: Porcelain prints every fact kind in a fixed order
+    Given a ticket exists with ID "imp-par" and title "Epic"
+    And a ticket exists with ID "imp-0001" and title "Target" with parent "imp-par"
+    And a ticket exists with ID "imp-0002" and title "Blocker"
+    And a ticket exists with ID "imp-0003" and title "Child" with parent "imp-0001"
+    And a ticket exists with ID "imp-0004" and title "Ready one"
+    And a ticket exists with ID "imp-0005" and title "Blocked one"
+    And a ticket exists with ID "imp-0006" and title "Other blocker"
+    And ticket "imp-0001" depends on "imp-0002"
+    And ticket "imp-0004" depends on "imp-0001"
+    And ticket "imp-0005" depends on "imp-0001"
+    And ticket "imp-0005" depends on "imp-0006"
+    And ticket "imp-0005" depends on "imp-0002"
+    When I run "ticket impact --porcelain imp-0001"
+    Then the exit code should be 0
+    And the output line 1 should contain "status open"
+    And the output line 2 should contain "blocker imp-0002"
+    And the output line 3 should contain "child imp-0003"
+    And the output line 4 should contain "ready imp-0004"
+    And the output line 5 should contain "blocked imp-0005 imp-0002,imp-0006"
+    And the output line 6 should contain "last-child imp-par"
+    And the output line count should be 6
+    And the error output should be empty
+
+  Scenario: Porcelain sorts facts by ID
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0003" and title "Created first"
+    And a ticket exists with ID "imp-0002" and title "Created second"
+    And ticket "imp-0003" depends on "imp-0001"
+    And ticket "imp-0002" depends on "imp-0001"
+    When I run "ticket impact --porcelain imp-0001"
+    Then the output line 2 should contain "ready imp-0002"
+    And the output line 3 should contain "ready imp-0003"
+    And the output line count should be 3
+
+  Scenario: Porcelain with no impact prints only the status
+    Given a ticket exists with ID "imp-0001" and title "Lonely"
+    When I run "ticket impact --porcelain imp-0001"
+    Then the exit code should be 0
+    And the output should be "status open"
+
+  Scenario: Porcelain flag may follow the ID
+    Given a ticket exists with ID "imp-0001" and title "Lonely"
+    When I run "ticket impact imp-0001 --porcelain"
+    Then the exit code should be 0
+    And the output should be "status open"
+
+  Scenario: Porcelain on a closed target keeps the ready lines
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Waiting"
+    And ticket "imp-0002" depends on "imp-0001"
+    And ticket "imp-0001" has status "closed"
+    When I run "ticket impact --porcelain imp-0001"
+    Then the output line 1 should contain "status closed"
+    And the output line 2 should contain "ready imp-0002"
+    And the output line count should be 2

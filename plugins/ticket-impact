@@ -129,6 +129,11 @@ function section(heading, list,    n, arr, i) {
     for (i = 1; i <= n; i++) print entry(arr[i])
 }
 
+function facts(kind, list,    n, arr, i) {
+    n = split(list, arr, ",")
+    for (i = 1; i <= n; i++) print kind " " arr[i]
+}
+
 END {
     if (seen) store()
     if (!(target in status)) {
@@ -155,6 +160,17 @@ END {
 
     last_child = (parent != "" && parent != target && (parent in status) \
         && status[parent] != "closed" && open_siblings == 0) ? parent : ""
+
+    if (porcelain) {
+        print "status " status[target]
+        facts("blocker", blockers)
+        facts("child", children)
+        facts("ready", ready)
+        n = split(blocked, arr, ",")
+        for (i = 1; i <= n; i++) print "blocked " arr[i] " " blocked_by[arr[i]]
+        if (last_child != "") print "last-child " last_child
+        exit 0
+    }
 
     printf "%s [%s] %s\n", target, status[target], title_of[target]
     if (blockers == "" && children == "" && ready == "" && blocked == "" && last_child == "") {
