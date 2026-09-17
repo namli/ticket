@@ -1,6 +1,6 @@
 ---
 id: tic-5cgv
-status: open
+status: in_progress
 deps: []
 links: [tic-mwhy, tic-5lpp]
 created: 2026-09-17T11:29:13Z
@@ -34,3 +34,7 @@ Edited: design decisions from the tooling discussion (2026-09-17); output format
 3. Output format `.tickets/<id>.md:<line>: <level>: <message>` (gcc/shellcheck style) instead of `<id>: <level>: <message>`: clickable in terminals and VS Code, and consumable by GitHub Actions problem matchers and reviewdog (`-efm="%f:%l: %m"`) with no extra dependency. Use the line of the offending front matter field; line 1 for whole-ticket findings.
 
 Rejected for this plugin: markdownlint / yamllint / vale (syntax and style only, blind to graph invariants), graphviz (visualisation, would be a separate `tk graph`), codegraph (indexes source code symbols, not ticket front matter; needs a daemon and index, contrary to the project's no-daemon stance).
+
+**2026-09-17T11:47:02Z**
+
+Edited: decision 2 above (tsort as first cycle check) is withdrawn. cmd_dep_cycle (ticket:490-600) already has a recursive DFS in awk that works on mawk, prints the path and dedups cycles; lint needs that DFS anyway for a readable path, so tsort would only add a second code path, a process and stderr parsing. Approach agreed with the user: one awk program inside plugins/ticket-lint (bash wrapper parses flags; main block loads all tickets, END runs one check_<rule>() function per rule), DFS adapted from cmd_dep_cycle but keeping closed tickets in the graph. Convention rules (Closed: / Blocked by notes) run only with --conventions, so a default run stays clean on projects that do not use the skill.
