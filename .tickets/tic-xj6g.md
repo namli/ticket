@@ -2,7 +2,7 @@
 id: tic-xj6g
 status: open
 deps: []
-links: [tic-vezj]
+links: [tic-vezj, tic-tpuf]
 created: 2026-09-17T13:11:33Z
 type: bug
 priority: 3

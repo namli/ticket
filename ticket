@@ -666,13 +666,14 @@ cmd_ready() {
     BEGIN { FS=": "; in_front=0 }
     FNR==1 {
         if (prev_file) store()
-        id=""; status=""; title=""; deps=""; priority=""; assignee=""; tags=""; in_front=0
+        id=""; status=""; title=""; deps=""; priority=""; assignee=""; tags=""; type=""; in_front=0
         prev_file=FILENAME
     }
     /^---$/ { in_front = !in_front; next }
     in_front && /^id:/ { id = $2 }
     in_front && /^status:/ { status = $2 }
     in_front && /^priority:/ { priority = $2 }
+    in_front && /^type:/ { type = $2 }
     in_front && /^assignee:/ { assignee = $2 }
     in_front && /^tags:/ { tags = $2; gsub(/[\[\] ]/, "", tags) }
     in_front && /^deps:/ {
@@ -691,6 +692,7 @@ cmd_ready() {
             titles[id] = title
             deps_raw[id] = deps
             priorities[id] = (priority != "") ? priority : 2
+            types[id] = (type != "") ? type : "task"
             assignees[id] = assignee
             all_tags[id] = tags
         }
@@ -717,7 +719,7 @@ cmd_ready() {
                 }
             }
             if (ready) {
-                output[++count] = sprintf("%s|%s|%s|%s", priorities[id], id, status, titles[id])
+                output[++count] = sprintf("%s|%s|%s|%s|%s", priorities[id], id, status, types[id], titles[id])
             }
         }
 
@@ -734,7 +736,7 @@ cmd_ready() {
 
         for (i = 1; i <= count; i++) {
             split(output[i], f, "|")
-            printf "%-8s [P%s][%s] - %s\n", f[2], f[1], f[3], f[4]
+            printf "%-8s [P%s][%s][%s] - %s\n", f[2], f[1], f[3], f[4], f[5]
         }
     }
     ' "$TICKETS_DIR"/*.md 2>/dev/null

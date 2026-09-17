@@ -87,7 +87,13 @@ Feature: Ticket Listing
     Given a ticket exists with ID "ready-001" and title "Priority ticket"
     When I run "ticket ready"
     Then the command should succeed
-    And the output should match pattern "ready-001\s+\[P2\]\[open\]\s+-\s+Priority ticket"
+    And the output should match pattern "ready-001\s+\[P2\]\[open\]\[task\]\s+-\s+Priority ticket"
+
+  Scenario: Ready shows ticket type in output
+    When I run "ticket create 'Bug ticket' -t bug"
+    And I run "ticket ready"
+    Then the command should succeed
+    And the output should match pattern "\[P2\]\[open\]\[bug\]\s+-\s+Bug ticket"
 
   Scenario: Ready sorts by priority then ID
     Given a ticket exists with ID "ready-003" and title "Low priority" with priority 3

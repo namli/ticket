@@ -4,6 +4,7 @@
 
 ### Changed
 - Extracted `edit`, `ls`, `query`, and `migrate-beads` commands to plugins (ticket-extras)
+- `ready` output shows the ticket type after the status: `id [P2][open][task] - title` (tickets without a `type` field show `task`)
 
 ### Added
 - Plugin system: executables named `tk-<cmd>` or `ticket-<cmd>` in PATH are invoked automatically
