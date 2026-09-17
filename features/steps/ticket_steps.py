@@ -739,3 +739,78 @@ exec "$TK_SCRIPT" super create "$@"
 def step_run_with_plugins(context, command):
     """Run a command with plugins in PATH."""
     run_with_plugin_path(context, command)
+
+
+# ============================================================================
+# Lint Steps
+# ============================================================================
+
+def _ticket_file(context, ticket_id):
+    return Path(context.test_dir) / '.tickets' / f'{ticket_id}.md'
+
+
+@given(r'ticket "(?P<ticket_id>[^"]+)" has raw field "(?P<field>[^"]+)" set to "(?P<value>[^"]*)"')
+def step_ticket_raw_field(context, ticket_id, field, value):
+    """Set a front matter field to an arbitrary (possibly invalid) value."""
+    ticket_path = _ticket_file(context, ticket_id)
+    content = ticket_path.read_text()
+    pattern = rf'^{re.escape(field)}:.*$'
+    if re.search(pattern, content, re.MULTILINE):
+        content = re.sub(pattern, f'{field}: {value}', content, count=1, flags=re.MULTILINE)
+    else:
+        # Append as the last front matter field (before the closing ---)
+        head, sep, rest = content[4:].partition('\n---\n')
+        content = '---\n' + head + f'\n{field}: {value}' + sep + rest
+    ticket_path.write_text(content)
+
+
+@given(r'ticket "(?P<ticket_id>[^"]+)" has no field "(?P<field>[^"]+)"')
+def step_ticket_no_field(context, ticket_id, field):
+    """Remove a front matter field."""
+    ticket_path = _ticket_file(context, ticket_id)
+    content = ticket_path.read_text()
+    content = re.sub(rf'^{re.escape(field)}:.*\n', '', content, count=1, flags=re.MULTILINE)
+    ticket_path.write_text(content)
+
+
+@given(r'ticket "(?P<ticket_id>[^"]+)" has a one-way link to "(?P<link_id>[^"]+)"')
+def step_ticket_one_way_link(context, ticket_id, link_id):
+    """Add a link on one side only."""
+    ticket_path = _ticket_file(context, ticket_id)
+    content = ticket_path.read_text()
+    content = re.sub(r'^links: \[\]', f'links: [{link_id}]', content, count=1, flags=re.MULTILINE)
+    ticket_path.write_text(content)
+
+
+@given(r'ticket "(?P<ticket_id>[^"]+)" has a note "(?P<text>[^"]+)"')
+def step_ticket_has_note(context, ticket_id, text):
+    """Append a timestamped note the way tk add-note does."""
+    ticket_path = _ticket_file(context, ticket_id)
+    content = ticket_path.read_text()
+    if '## Notes' not in content:
+        content += '\n## Notes\n'
+    content += f'\n**2024-01-02T00:00:00Z**\n\n{text}\n'
+    ticket_path.write_text(content)
+
+
+@given(r'ticket "(?P<ticket_id>[^"]+)" has body line "(?P<text>[^"]+)"')
+def step_ticket_has_body_line(context, ticket_id, text):
+    """Append a raw line to the ticket body."""
+    ticket_path = _ticket_file(context, ticket_id)
+    ticket_path.write_text(ticket_path.read_text() + f'\n{text}\n')
+
+
+@then(r'the exit code should be (?P<code>\d+)')
+def step_exit_code(context, code):
+    assert context.returncode == int(code), \
+        f"Expected exit code {code} but got {context.returncode}\nstdout: {context.stdout}\nstderr: {context.stderr}"
+
+
+@then(r'the error output should be empty')
+def step_stderr_empty(context):
+    assert context.stderr == '', f"Expected empty stderr but got: {context.stderr}"
+
+
+@then(r'the error output should contain "(?P<text>[^"]+)"')
+def step_stderr_contains(context, text):
+    assert text in context.stderr, f"Expected stderr to contain '{text}'\nActual stderr: {context.stderr}"

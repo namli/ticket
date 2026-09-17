@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# tk-plugin: Check tickets for broken graph invariants and convention violations
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+usage() {
+    echo "Usage: tk lint [--conventions] [--strict]"
+    echo "  --conventions  also check Closed: / Blocked by notes"
+    echo "  --strict       exit 1 on warnings too"
+}
+
+conventions=0
+strict=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --conventions) conventions=1; shift ;;
+        --strict) strict=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+shopt -s nullglob
+files=("$TICKETS_DIR"/*.md)
+[[ ${#files[@]} -eq 0 ]] && exit 0
+
+# Show paths relative to the current directory when possible (clickable, CI-friendly)
+dir="${TICKETS_DIR%/}"
+dir="${dir#"$PWD"/}"
+
+rc=0
+out=$(awk -v dir="$dir" -v conventions="$conventions" -v strict="$strict" '
+# --- Loading: one pass over all ticket files ---
+FNR == 1 {
+    n = split(FILENAME, parts, "/")
+    cur = parts[n]
+    sub(/\.md$/, "", cur)
+    files[++nfiles] = cur
+    exists[cur] = 1
+    # fm: 1 = inside front matter, 2 = body (or the file has no front matter)
+    fm = ($0 == "---") ? 1 : 2
+    in_notes = 0
+    next
+}
+fm == 1 && /^---$/ { fm = 2; next }
+fm == 1 && /^[a-zA-Z][a-zA-Z_-]*:/ {
+    key = substr($0, 1, index($0, ":") - 1)
+    val = substr($0, index($0, ":") + 1)
+    gsub(/^[ \t]+|[ \t]+$/, "", val)
+    field[cur, key] = val
+    line[cur, key] = FNR
+    if (key == "deps" || key == "links") {
+        gsub(/[][]/, "", val); gsub(/[ \t]/, "", val)
+        cnt = split(val, items, ",")
+        for (i = 1; i <= cnt; i++) if (items[i] != "") {
+            if (key == "deps") dep[cur, ++ndeps[cur]] = items[i]
+            else { lnk[cur, ++nlinks[cur]] = items[i]; haslink[cur, items[i]] = 1 }
+        }
+    }
+    next
+}
+
+# --- Reporting ---
+function emit(id, ln, level, rule, msg) {
+    if (ln == "" || ln == 0) ln = 1
+    printf "%s/%s.md:%d: %s: %s [%s]\n", dir, id, ln, level, msg, rule
+    if (level == "error") errors++; else warnings++
+}
+function plural(count, word) { return count " " word (count == 1 ? "" : "s") }
+function is_closed(id) { return field[id, "status"] == "closed" }
+
+# --- Rules ---
+function check_ids(    f, id) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        if (!((id, "id") in field))
+            emit(id, 1, "error", "id-mismatch", "missing id field")
+        else if (field[id, "id"] != id)
+            emit(id, line[id, "id"], "error", "id-mismatch", "id \"" field[id, "id"] "\" does not match file name \"" id "\"")
+    }
+}
+function check_fields(    f, id, v) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        v = field[id, "status"]
+        if (v != "open" && v != "in_progress" && v != "closed")
+            emit(id, line[id, "status"], "error", "invalid-status", "invalid status \"" v "\" (open|in_progress|closed)")
+        if (is_closed(id)) continue
+        v = field[id, "priority"]
+        if (v !~ /^[0-4]$/)
+            emit(id, line[id, "priority"], "error", "invalid-priority", "invalid priority \"" v "\" (0-4)")
+        v = field[id, "type"]
+        if (v != "bug" && v != "feature" && v != "task" && v != "epic" && v != "chore")
+            emit(id, line[id, "type"], "warning", "invalid-type", "unknown type \"" v "\" (bug|feature|task|epic|chore)")
+    }
+}
+
+END {
+    check_ids()
+    check_fields()
+    if (errors + warnings > 0)
+        print plural(errors + 0, "error") ", " plural(warnings + 0, "warning") | "cat 1>&2"
+    exit (errors > 0 || (strict && warnings > 0)) ? 1 : 0
+}
+' "${files[@]}") || rc=$?
+
+if [[ -n "$out" ]]; then
+    printf '%s\n' "$out" | LC_ALL=C sort -t: -k1,1 -k2,2n
+fi
+exit "$rc"
