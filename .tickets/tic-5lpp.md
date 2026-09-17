@@ -1,8 +1,8 @@
 ---
 id: tic-5lpp
-status: open
+status: closed
 deps: []
-links: [tic-5cgv]
+links: [tic-5cgv, tic-12tn]
 created: 2026-09-17T11:29:13Z
 type: feature
 priority: 1
@@ -22,3 +22,13 @@ Single awk pass over "$TICKETS_DIR"/*.md like cmd_ready (ticket:653) and cmd_blo
 
 Scenarios in features/ticket_impact.feature: dependent with single blocker listed as becomes-ready; dependent with a second open blocker listed as still blocked; open children listed; last-child case reported; closed dependents ignored; partial ID works. Behave scenarios added and `make test` passes; README.md usage block, plugins/README.md and CHANGELOG.md (### Plugins, version 1.0.0) updated; plugin has tk-plugin and tk-plugin-version metadata; NOT added to pkg/extras.txt (new plugin, not a core extraction).
 
+
+## Notes
+
+**2026-09-17T15:23:06Z**
+
+Design decided (user, 2026-09-17), spec: docs/superpowers/specs/2026-09-17-ticket-impact-design.md. --porcelain replaces --ids-ready: one stable line-per-fact mode (status / blocker / child / ready / blocked / last-child), because ticket-close also needs open blockers and open children, which a list of ready IDs cannot carry. Every fact is computed as if the target were closed; on an already closed target the human output says 'Already closed. Reopening would re-block:'.
+
+**2026-09-17T16:34:23Z**
+
+Closed: done - plugins/ticket-impact 1.0.0: tk impact [--porcelain] <id>, 30 scenarios in features/ticket_impact.feature. Deviations from the ticket text: --porcelain replaces --ids-ready; README.md gets a Plugins-section sentence instead of a usage-block line (same treatment as ticket-lint). Remaining test gaps: tic-12tn.

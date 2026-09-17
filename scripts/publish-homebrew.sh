@@ -47,6 +47,12 @@ generate_plugin_formula() {
     # Convert plugin name to Ruby class name (ticket-query -> TicketQuery)
     local class_name="Ticket$(echo "$plugin_name" | sed -r 's/(^|-)(\w)/\U\2/g')"
 
+    # Plugins that call other plugins
+    local extra_deps=""
+    case "$plugin_name" in
+        start|reopen) extra_deps=$'\n  depends_on "ticket-impact"' ;;
+    esac
+
     cat > "$formula_dir/ticket-$plugin_name.rb" << EOF
 class $class_name < Formula
   desc "$pkgdesc"
@@ -55,7 +61,7 @@ class $class_name < Formula
   sha256 "$SHA256"
   license "MIT"
 
-  depends_on "ticket-core"
+  depends_on "ticket-core"$extra_deps
 
   def install
     bin.install "plugins/ticket-$plugin_name"$(find_plugin_symlinks "$plugin_name")

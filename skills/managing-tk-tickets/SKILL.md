@@ -16,8 +16,8 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 ## tk facts that bite
 
 - ANY closed blocker counts as resolved, whatever the reason: a wrong close silently moves dependents to `tk ready`. `tk close` has no guards (closes blocked tickets and parents with open children, records no reason).
-- `tk reopen` silently re-blocks dependents and sets `open`; restore work in progress with `tk status <id> in_progress`.
-- Self-deps and cycles are accepted: run `tk dep cycle` after every dep change. `tk start` works on a blocked ticket - never do it.
+- `tk reopen <id> -m "<reason>" [--in-progress]` (ticket-reopen plugin) writes the `Reopened:` note and reports the re-blocked dependents. Without the plugin the built-in silently re-blocks dependents, sets `open` and records nothing: write the note yourself and restore work in progress with `tk status <id> in_progress`.
+- `tk dep` (ticket-dep plugin) refuses self-deps and cycles; the built-in accepts both: without the plugin run `tk dep cycle` after every dep change. `tk start` (ticket-start plugin) refuses blocked and closed tickets; the built-in starts anything - never start a blocked ticket, and use `--force` only when the user says so.
 - No command changes title / priority / tags / parent / body, and `tk edit` needs a terminal: edit `.tickets/<id>.md` directly. Status, deps, links, notes go ONLY through `tk`.
 - `tk query` returns front matter only; search content with `tk find`. `tk show <id>` renders **Blockers**, **Blocking**, **Children**.
 - `tk create` prints only the ID. Write it on ONE line: a `# comment` after a `\` ends the command and leaves a junk ticket. In double quotes escape `$`.
@@ -62,13 +62,13 @@ The close rides in the commit that completes the work - never earlier, never on 
 3. STOP AND ASK. Show the evidence, the resolution, and which **Blocking** tickets really become ready (no other open blocker). Close only after an explicit yes. "It's done, commit it" authorises the commit, NOT the close - hurry does not change this.
 4. `tk add-note <id> "Closed: done - <one line: what was delivered>"`, then `tk close <id>`.
 5. `tk ready` -> report what became unblocked (on this branch only, until merged); last child closed -> propose closing the parent.
-6. `git add .tickets/` LAST, commit with the work. Commit fails -> fix and retry. Commit abandoned -> `tk status <id> in_progress` + note `Reopened: commit abandoned`.
+6. `git add .tickets/` LAST, commit with the work. Commit fails -> fix and retry. Commit abandoned -> `tk reopen <id> -m "commit abandoned" --in-progress` (no plugin: `tk status <id> in_progress` + note `Reopened: commit abandoned`).
 
 Note prefixes (grep `^Closed: `): `Closed: done - ...` | `Closed: won't do - <why>` | `Closed: duplicate of <id>` | `Closed: superseded by <id>`.
 
 **Won't do / duplicate / superseded:** settle every **Blocking** ticket BEFORE `tk close` - afterwards it is already falsely ready. Ask the user per dependent: not needed -> `tk undep <dependent> <id>`; replaced -> `tk undep` + `tk dep <dependent> <replacement>`; pointless without it -> close it too. Each with a note. Parent: close or detach every open child first. Ticket-only commit: ask which branch.
 
-**Reopening** a committed close: `tk add-note <id> "Reopened: <reason>"`, `tk reopen <id>`, `tk blocked` -> report what went back; commit with the rework.
+**Reopening** a committed close: `tk reopen <id> -m "<reason>"` -> report its `Re-blocked:` line; commit with the rework. No plugin: `tk add-note <id> "Reopened: <reason>"`, `tk super reopen <id>`, `tk blocked` -> report what went back.
 
 ## Editing
 

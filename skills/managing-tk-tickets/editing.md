@@ -19,4 +19,4 @@ Read `SKILL.md` first. Body and front matter are edited in `.tickets/<id>.md`; s
 
 **Merging duplicates:** keep the older / richer ticket, copy unique facts into it as a note, re-point the other one's dependents to it, close the other as `Closed: duplicate of <id>`.
 
-**Closed tickets are not rewritten:** reopen with a `Reopened: <reason>` note, or open a new linked ticket.
+**Closed tickets are not rewritten:** reopen with `tk reopen <id> -m "<reason>"` (no plugin: a `Reopened: <reason>` note + `tk super reopen <id>`), or open a new linked ticket.
