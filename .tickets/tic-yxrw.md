@@ -1,6 +1,6 @@
 ---
 id: tic-yxrw
-status: open
+status: in_progress
 deps: [tic-zmz1, tic-5lpp]
 links: []
 created: 2026-09-17T11:29:13Z
@@ -44,3 +44,7 @@ Design update from tic-5lpp: 'reuse tk impact --ids-ready' now reads 'tk impact 
 **2026-09-17T16:34:15Z**
 
 Open design question from the tic-5lpp final review, deferred here by the user (2026-09-17): add a 'target <full-id>' line to 'tk impact --porcelain' so ticket-close / ticket-reopen do not re-resolve a partial ID themselves (a third copy of the find block). Additive, legal within the 1.x porcelain contract (consumers ignore unknown kinds). Decide when designing ticket-close.
+
+**2026-09-17T16:49:28Z**
+
+Design decisions (spec docs/superpowers/specs/2026-09-17-ticket-close-guard-design.md): no 'target' line in 'tk impact --porcelain' - target and --ref are resolved through 'tk super show' (no copy of the find block, ticket-impact stays 1.0.0); -m required for done/wontdo, optional for duplicate/superseded; one --force overrides all guards and adds a 'Forced: ...' second line to the Closed note; already closed -> exit 0, no note.
