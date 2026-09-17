@@ -49,7 +49,7 @@ Exit codes (same scheme as `ticket-impact` and `ticket-dep`):
 |---|---|
 | 0 | Ticket closed, or it was already closed (nothing changed). |
 | 1 | A guard refused; `<id>` or `--ref` not found or ambiguous; `--ref` resolves to the target itself; `ticket-impact` is not on `PATH`; a delegated built-in failed. |
-| 2 | Usage error: unknown flag, missing or extra `<id>`, missing or invalid `--reason`, `done` / `wontdo` without `-m` or with an empty one, `duplicate` / `superseded` without `--ref`, `--ref` with `done` / `wontdo`; or no tickets directory (`TICKETS_DIR` unset or not a directory). Message and usage on stderr. |
+| 2 | Usage error: unknown flag, missing or extra `<id>`, missing or invalid `--reason`, `done` / `wontdo` without `-m` or with an empty one, `duplicate` / `superseded` without `--ref`, `--ref` with `done` / `wontdo`; or no tickets directory (`TICKETS_DIR` unset or not a directory); or `TK_SCRIPT` unset (the plugin was not started through `tk`). Message and usage on stderr. |
 
 ## Behaviour
 
@@ -161,7 +161,8 @@ Shell functions, each with one job:
 |---|---|
 | `usage` | Usage text. |
 | `resolve_id <id>` | Full ID on stdout via `tk super show`, or core's error and return 1. |
-| `facts_of <kind>` | The IDs (second field) of the porcelain lines of one kind, comma-joined with `, `. |
+| `die_usage <msg>` | `Error: <msg>` and the usage on stderr, exit 2. |
+| `facts_of <kind>...` | The IDs (second field) of the porcelain lines of the given kinds, joined with `, `. |
 
 The plugin contains no graph logic and no pass over the ticket files: every graph fact comes from `tk impact --porcelain`, every write goes through `"$TK_SCRIPT" super add-note|close`. Dependencies: bash, POSIX awk, the `ticket-impact` plugin. No `rg`, no `jq`.
 
