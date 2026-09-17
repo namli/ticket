@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# tk-plugin: Guarded reopen: record the reason, report re-blocked dependents
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+usage() {
+    echo "Usage: tk reopen <id> -m <reason> [--in-progress] [--force]"
+    echo "  -m <reason>    why the ticket is reopened; written as a 'Reopened:' note"
+    echo "  --in-progress  set status in_progress instead of open"
+    echo "  --force        with --in-progress: reopen although the ticket has open blockers"
+    echo "Bypass the guard: tk super reopen <id>"
+}
+
+die_usage() {
+    echo "Error: $1" >&2
+    usage >&2
+    exit 2
+}
+
+if [[ -z "${TK_SCRIPT:-}" ]]; then
+    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
+    exit 2
+fi
+
+reason="" have_reason=0 in_progress=0 force=0
+ids=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -m)
+            [[ $# -ge 2 ]] || die_usage "-m requires a reason"
+            reason="$2"; have_reason=1; shift 2 ;;
+        --in-progress) in_progress=1; shift ;;
+        --force) force=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; while [[ $# -gt 0 ]]; do ids+=("$1"); shift; done ;;
+        -*) die_usage "unknown option: $1" ;;
+        *) ids+=("$1"); shift ;;
+    esac
+done
+
+[[ ${#ids[@]} -eq 1 ]] || die_usage "expected exactly one <id>"
+[[ $have_reason -eq 1 ]] || die_usage "-m <reason> is required"
+[[ -n "${reason//[[:space:]]/}" ]] || die_usage "-m must not be empty"
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+# Full ID on stdout; core resolves it, so partial IDs and error texts match every other command
+resolve_id() {
+    local out
+    out=$("$TK_SCRIPT" super show "$1") || return 1
+    awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+}
+
+# IDs (second field) of the porcelain lines of one kind, joined with ", "
+facts_of() {
+    awk -v kind="$1" '$1 == kind { printf "%s%s", sep, $2; sep = ", " }' <<< "$facts"
+}
+
+id=$(resolve_id "${ids[0]}") || exit 1
+
+if ! command -v ticket-impact >/dev/null 2>&1 && ! command -v tk-impact >/dev/null 2>&1; then
+    echo "Error: tk reopen needs the ticket-impact plugin on PATH" >&2
+    echo "Use 'tk super reopen' to bypass the guard" >&2
+    exit 1
+fi
+
+# One read, while the ticket is still closed: its 'ready' lines are what the reopen re-blocks
+facts=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
+status=$(awk '$1 == "status" { print $2; exit }' <<< "$facts")
+blockers=$(facts_of blocker)
+reblocked=$(facts_of ready)
+
+if [[ "$status" != "closed" ]]; then
+    echo "$id is not closed (status: ${status:-unknown}) - nothing to reopen"
+    exit 0
+fi
+
+new_status="open"
+note="Reopened: $reason"
+if [[ $in_progress -eq 1 ]]; then
+    new_status="in_progress"
+    if [[ -n "$blockers" ]]; then
+        if [[ $force -eq 0 ]]; then
+            echo "Error: $id has open blockers: $blockers" >&2
+            echo "Use --force to reopen as in_progress anyway, or reopen without --in-progress" >&2
+            exit 1
+        fi
+        echo "Warning: reopening $id as in_progress with open blockers: $blockers" >&2
+        note+=$'\n'"Forced: open blockers $blockers"
+    fi
+fi
+
+"$TK_SCRIPT" super add-note "$id" "$note" >/dev/null || exit 1
+if ! "$TK_SCRIPT" super status "$id" "$new_status"; then
+    echo "Error: note written but tk super status failed" >&2
+    exit 1
+fi
+echo "Note: ${note%%$'\n'*}"
+
+if [[ -n "$reblocked" ]]; then
+    echo "Re-blocked: $reblocked"
+else
+    echo "Nothing was re-blocked"
+fi

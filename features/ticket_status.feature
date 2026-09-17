@@ -40,7 +40,7 @@ Feature: Ticket Status Management
 
   Scenario: Reopen command sets status to open
     Given ticket "test-0001" has status "closed"
-    When I run "ticket reopen test-0001"
+    When I run "ticket super reopen test-0001"
     Then the command should succeed
     And the output should be "Updated test-0001 -> open"
     And ticket "test-0001" should have field "status" with value "open"
