@@ -91,7 +91,7 @@ Intended use:
 
 ```bash
 out=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
-grep -q '^blocker \|^child ' <<<"$out" && refuse
+grep -qE '^blocker |^child ' <<<"$out" && refuse
 awk '$1 == "ready" { print $2 }' <<<"$out"      # unblock report
 ```
 

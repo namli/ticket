@@ -158,7 +158,7 @@ last-child <parent-id>
 
 ```bash
 out=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
-if grep -q '^blocker \|^child ' <<<"$out"; then
+if grep -qE '^blocker |^child ' <<<"$out"; then
     echo "refusing to close $id: open blockers or children" >&2
     exit 1
 fi
