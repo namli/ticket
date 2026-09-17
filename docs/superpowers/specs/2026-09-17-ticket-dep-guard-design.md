@@ -118,6 +118,7 @@ Shell functions, each with one job:
 |---|---|
 | `usage` | Usage text for the current mode. |
 | `resolve_id <id>` | Full ID on stdout, or core's error text and return 1. |
+| `field_of <id> <key>` | One front matter value of one ticket (used for `deps` and `status`). |
 | `deps_of <id>` | The `deps` array of one ticket, one ID per line (front matter only, `gsub(/[][]/, "")` - POSIX bracket expression, see `tic-xj6g`). |
 | `has_dep <id> <dep-id>` | Exact element test on `deps_of`. |
 | `cycle_path <id> <dep-id>` | The awk walk; prints the cycle path and returns 0 when `<id>` is reachable from `<dep-id>`, returns 1 otherwise. |
@@ -128,7 +129,7 @@ Dependencies: bash, POSIX awk, `find`. No `rg`, no `jq`. Writes happen only thro
 
 ## Testing
 
-New `features/ticket_dep_guard.feature`; existing step definitions are enough (`should have "<id>" in deps`, `should not have ... in deps`, `should contain`, `the exit code should be`, `the error output should contain`, `the output line N should contain`).
+New `features/ticket_dep_guard.feature`; one new step, `ticket "<id>" should not contain "<text>"`, the other step definitions exist (`should have "<id>" in deps`, `should not have ... in deps`, `should contain`, `the exit code should be`, `the error output should contain`, `the output line N should contain`).
 
 | Area | Scenarios |
 |---|---|
