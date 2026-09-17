@@ -162,6 +162,25 @@ write_note() {
     echo "Note: $2"
 }
 
+# Last output line: is <id> ready, blocked (by what) or closed?
+state_line() {
+    local id="$1" d st blockers=""
+    if [[ "$(field_of "$id" status)" == "closed" ]]; then
+        echo "$id is closed"
+        return 0
+    fi
+    while IFS= read -r d; do
+        if [[ -f "$TICKETS_DIR/$d.md" ]]; then st=$(field_of "$d" status); else st="missing"; fi
+        [[ "$st" == "closed" ]] && continue
+        blockers+="${blockers:+, }$d [$st]"
+    done < <(deps_of "$id")
+    if [[ -n "$blockers" ]]; then
+        echo "$id is blocked by: $blockers"
+    else
+        echo "$id is ready"
+    fi
+}
+
 id=$(resolve_id "${ids[0]}") || exit 1
 dep_id=$(resolve_id "${ids[1]}") || exit 1
 
@@ -173,6 +192,7 @@ if [[ "$mode" == "dep" ]]; then
     fi
     if has_dep "$id" "$dep_id"; then
         echo "Dependency already exists"
+        state_line "$id"
         exit 0
     fi
     rc=0
@@ -205,3 +225,4 @@ else
     echo "$out"
     [[ $no_note -eq 1 ]] || write_note "$id" "No longer blocked by $dep_id: $reason"
 fi
+state_line "$id"

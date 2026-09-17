@@ -232,3 +232,56 @@ Feature: Guarded dep and undep
     When I run "ticket dep guard-0001 guard-0002 --no-note"
     Then the exit code should be 0
     And ticket "guard-0001" should contain "deps: [guard-0002]"
+
+  # --- State line ---
+
+  Scenario: dep prints the blocked state
+    When I run "ticket dep guard-0001 guard-0002 --reason 'needs the parser'"
+    Then the exit code should be 0
+    And the output line 3 should contain "guard-0001 is blocked by: guard-0002 [open]"
+    And the output line count should be 3
+
+  Scenario: Every non-closed blocker is listed with its status
+    Given ticket "guard-0001" depends on "guard-0002"
+    And ticket "guard-0002" has status "in_progress"
+    When I run "ticket dep guard-0001 guard-0003 --no-note"
+    Then the exit code should be 0
+    And the output line 2 should contain "guard-0001 is blocked by: guard-0002 [in_progress], guard-0003 [open]"
+
+  Scenario: A closed dependency does not block
+    Given ticket "guard-0002" has status "closed"
+    When I run "ticket dep guard-0001 guard-0002 --no-note"
+    Then the exit code should be 0
+    And the output line 2 should contain "guard-0001 is ready"
+
+  Scenario: undep of the last open blocker makes the ticket ready
+    Given ticket "guard-0001" depends on "guard-0002"
+    When I run "ticket undep guard-0001 guard-0002 --reason 'split out'"
+    Then the exit code should be 0
+    And the output line 3 should contain "guard-0001 is ready"
+
+  Scenario: undep with another blocker left keeps the ticket blocked
+    Given ticket "guard-0001" depends on "guard-0002"
+    And ticket "guard-0001" depends on "guard-0003"
+    When I run "ticket undep guard-0001 guard-0002 --no-note"
+    Then the exit code should be 0
+    And the output line 2 should contain "guard-0001 is blocked by: guard-0003 [open]"
+
+  Scenario: A closed ticket is reported as closed
+    Given ticket "guard-0001" has status "closed"
+    When I run "ticket dep guard-0001 guard-0002 --no-note"
+    Then the exit code should be 0
+    And the output line 2 should contain "guard-0001 is closed"
+
+  Scenario: A dependency without a ticket file is listed as missing
+    Given ticket "guard-0001" has raw field "deps" set to "[ghost-9999]"
+    When I run "ticket dep guard-0001 guard-0002 --no-note"
+    Then the exit code should be 0
+    And the output line 2 should contain "guard-0001 is blocked by: ghost-9999 [missing], guard-0002 [open]"
+
+  Scenario: Duplicate dependency still prints the state
+    Given ticket "guard-0001" depends on "guard-0002"
+    When I run "ticket dep guard-0001 guard-0002 --reason 'again'"
+    Then the exit code should be 0
+    And the output line 1 should contain "Dependency already exists"
+    And the output line 2 should contain "guard-0001 is blocked by: guard-0002 [open]"
