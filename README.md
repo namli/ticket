@@ -51,11 +51,14 @@ Claude Opus picks it up naturally from there. Other models may need additional g
 
 ### Agent skill
 
-`tk` validates almost nothing, so the dependency graph stays accurate only if the agent follows some conventions. The [`managing-tk-tickets`](skills/managing-tk-tickets/SKILL.md) skill teaches them: search the backlog before creating a ticket, choose between `dep`, `link` and `--parent`, check for cycles, and close a ticket only in the commit that completes the work, after asking.
+The core `tk` validates almost nothing; the official guard plugins (see [Plugins](#plugins)) enforce the mechanics - no cycles, no closing over open blockers, a recorded reason for every dep and close. The [`managing-tk-tickets`](skills/managing-tk-tickets/SKILL.md) skill teaches the agent the judgment no command can make: search the backlog before creating a ticket, choose between `dep`, `link` and `--parent`, never answer a guard refusal with `--force`, and close a ticket only in the commit that completes the work, after asking.
 
-To install it for Claude Code, copy or symlink the directory into your skills folder:
+The skill requires the official plugins (`ticket-close`, `ticket-dep` with `ticket-undep`, `ticket-start`, `ticket-reopen`, `ticket-impact`, `ticket-find`, `ticket-set`, `ticket-lint`) on your PATH. It checks `tk help` first and stops without changing any ticket if one is missing - there is no manual fallback.
+
+To install both for Claude Code, put `plugins/` on your PATH and copy or symlink the skill directory into your skills folder:
 
 ```bash
+export PATH="$PWD/plugins:$PATH"   # add to your shell profile
 ln -s "$PWD/skills/managing-tk-tickets" ~/.claude/skills/managing-tk-tickets
 ```
 
