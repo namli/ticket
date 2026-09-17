@@ -21,3 +21,9 @@ Replace every occurrence with the POSIX-correct form used in plugins/ticket-lint
 
 No awk regex in `ticket` or plugins/* contains a backslash inside a bracket expression any more (search for the two characters "[" + backslash). With busybox awk first in PATH (shim script `exec busybox awk "$@"` named awk) the scenarios of features/ticket_listing.feature and features/ticket_dependencies.feature pass, as they do with the system awk. `make test` passes. CHANGELOG.md: Fixed entry for core and "### Plugins: ticket-ls 1.0.1".
 
+
+## Notes
+
+**2026-09-17T18:17:52Z**
+
+Related tic-mwhy: with busybox awk first in PATH the scenario 'dep tree works through the plugin' in features/ticket_dep_guard.feature fails too (44/45), because the built-in 'tk super dep tree' drops children (ticket:319). It turns green with this fix; add features/ticket_dep_guard.feature to the busybox acceptance run.

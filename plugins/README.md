@@ -56,6 +56,39 @@ brew install ticket-core ticket-query    # Core + specific plugin
 3. Add to `pkg/extras.txt` if it should be in the extras bundle
 4. Commit and tag a release
 
+## ticket-dep (and ticket-undep)
+
+`plugins/ticket-dep` shadows the built-in `tk dep`; `plugins/ticket-undep` is a symlink to it and shadows `tk undep`. One package, `ticket-dep`, installs both.
+
+```
+tk dep   <id> <dep-id> (--reason <text> | --no-note)
+tk undep <id> <dep-id> (--reason <text> | --no-note)
+tk dep tree [--full] <id>      unchanged, passed to the built-in
+tk dep cycle                   unchanged, passed to the built-in
+```
+
+```
+$ tk dep nw-5c46 nw-7a21 --reason "needs the session store"
+Added dependency: nw-5c46 -> nw-7a21
+Note: Blocked by nw-7a21: needs the session store
+nw-5c46 is blocked by: nw-7a21 [open]
+```
+
+What the guard adds to the built-in:
+
+- `tk dep A A` is refused.
+- A dependency that would close a cycle is refused and the cycle is shown (`A -> B -> C -> A`). Closed tickets count as edges, as in `tk lint`. The check does not rely on `tk dep cycle`.
+- "Already exists" / "not found" compare whole IDs; the built-in matches substrings of the `deps:` line. If the built-in refuses a dependency because of that, the plugin reports it (exit 1) instead of printing a false "already exists".
+- `tk undep` refuses (exit 1) when the built-in would damage another dependency: it removes the ID as an unanchored pattern, so removing `abc-001` next to `abc-0012`, or `a.b-0001` next to `axb-0001`, would corrupt `deps`. Such a dependency has to be removed by editing the ticket file. After every `undep` the plugin also checks that the other dependencies are unchanged.
+- `--reason <text>` is required and is written as a note on `<id>`: `Blocked by <dep-id>: <text>` for `dep`, `No longer blocked by <dep-id>: <text>` for `undep`. `--no-note` skips the note.
+- The last output line says where the ticket stands: `<id> is ready`, `<id> is blocked by: <dep> [<status>], ...` or `<id> is closed`.
+
+There is no `--force`: a self-dependency or a cycle is never legitimate. `tk super dep` / `tk super undep` run the built-in without the guard.
+
+Exit codes: `0` done (or the dependency was already there), `1` refused, ticket not found, `undep` of a dependency that is not there, or the built-in failed, `2` usage error or no `.tickets` directory found.
+
+Requires only bash, POSIX awk and `find`. The plugin never edits ticket files itself; every write goes through `tk super dep|undep|add-note`.
+
 ## ticket-find
 
 `tk find [--all] [-T tag] <pattern> [pattern...]` searches ticket content - the part `tk query` does not return - and prints one list line per matching ticket, sorted by ID:
@@ -189,6 +222,54 @@ awk '$1 == "ready" { print $2 }' <<<"$out"   # tickets that become ready
 ```
 
 Requires only bash, POSIX awk, `find` and `grep`.
+
+## ticket-start
+
+`tk start <id> [--force]` shadows the built-in `tk start`, which starts anything - including a ticket whose blockers are still open. It accepts one full or partial ID; flags may come before or after it.
+
+| Ticket | Result |
+|---|---|
+| has open blockers (any dependency that is not `closed`, dangling IDs included) | refused, exit 1; `--force` starts it anyway, prints a `Warning:` and writes the note `Forced start: open blockers <ids>` |
+| is `closed` | always refused, exit 1, also with `--force`: starting a closed ticket is a reopen without a reason - use `tk reopen <id> -m <reason> --in-progress` |
+| is `in_progress` | `<id> is already in progress`, exit 0, nothing changes |
+| otherwise | `Updated <id> -> in_progress` |
+
+```
+$ tk start nw-5c46
+Error: nw-5c46 has open blockers: nw-1d09
+Use --force to start anyway, or 'tk super start' to bypass the guard
+```
+
+Exit codes: 0 started or already in progress, 1 refused / ticket not found or ambiguous ID or an `id:` field that does not match the file name / `ticket-impact` missing, 2 usage error (including an empty ID) or no tickets directory.
+
+The guard reads its facts from `tk impact --porcelain` and changes the ticket only through `tk super start` and `tk super add-note`. `tk super start <id>` runs the unguarded built-in.
+
+Requires bash, POSIX awk and the `ticket-impact` plugin.
+
+## ticket-reopen
+
+`tk reopen <id> -m <reason> [--in-progress] [--force]` shadows the built-in `tk reopen`, which silently re-blocks dependents, always sets `open` and records nothing.
+
+| Flag | Effect |
+|---|---|
+| `-m <reason>` | Required, not empty. Written as the note `Reopened: <reason>`. |
+| `--in-progress` | Set `in_progress` instead of `open`. Refused (exit 1) when the ticket has open blockers - the case `tk start` refuses. |
+| `--force` | With `--in-progress`: reopen despite open blockers; prints a `Warning:` and adds a second note line `Forced: open blockers <ids>`. |
+
+```
+$ tk reopen nw-5c46 -m "reconnect loop under packet loss"
+Updated nw-5c46 -> open
+Note: Reopened: reconnect loop under packet loss
+Re-blocked: nw-7a21
+```
+
+`Re-blocked:` lists the dependents whose only open blocker is now the reopened ticket, i.e. the ones that leave `tk ready`; dependents that were already blocked by something else are not listed. With none it prints `Nothing was re-blocked`. A ticket that is not closed is left alone: `<id> is not closed (status: <status>) - nothing to reopen`, exit 0, no note - so an `in_progress` ticket is never demoted to `open`. A plain reopen (without `--in-progress`) is never refused.
+
+Exit codes: 0 reopened or nothing to reopen, 1 refused / ticket not found or ambiguous ID or an `id:` field that does not match the file name / `ticket-impact` missing, 2 usage error (including a missing or empty `-m`) (including an empty ID) or no tickets directory.
+
+The facts come from one `tk impact --porcelain` call taken while the ticket is still closed; the note and the status go through `tk super add-note` and `tk super status`. `tk super reopen <id>` runs the unguarded built-in.
+
+Requires bash, POSIX awk and the `ticket-impact` plugin.
 
 ## ticket-close
 

@@ -47,10 +47,10 @@ generate_plugin_formula() {
     # Convert plugin name to Ruby class name (ticket-query -> TicketQuery)
     local class_name="Ticket$(echo "$plugin_name" | sed -r 's/(^|-)(\w)/\U\2/g')"
 
-    # Plugins that call another plugin depend on its formula
+    # Plugins that call other plugins
     local extra_deps=""
     case "$plugin_name" in
-        close) extra_deps=$'\n  depends_on "ticket-impact"' ;;
+        start|reopen|close) extra_deps=$'\n  depends_on "ticket-impact"' ;;
     esac
 
     cat > "$formula_dir/ticket-$plugin_name.rb" << EOF

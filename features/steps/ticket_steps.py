@@ -822,3 +822,11 @@ def step_stderr_empty(context):
 @then(r'the error output should contain "(?P<text>[^"]+)"')
 def step_stderr_contains(context, text):
     assert text in context.stderr, f"Expected stderr to contain '{text}'\nActual stderr: {context.stderr}"
+
+
+@then(r'ticket "(?P<ticket_id>[^"]+)" should not contain "(?P<text>[^"]+)"')
+def step_ticket_not_contains(context, ticket_id, text):
+    """Assert ticket file does not contain text."""
+    ticket_path = Path(context.test_dir) / '.tickets' / f'{ticket_id}.md'
+    content = ticket_path.read_text()
+    assert text not in content, f"Ticket should not contain '{text}'\nContent: {content}"

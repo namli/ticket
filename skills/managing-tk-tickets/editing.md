@@ -11,7 +11,7 @@ Read `SKILL.md` first. Body and front matter are edited in `.tickets/<id>.md`; s
 3. RE-DERIVE THE GRAPH, both directions:
    - Blockers: ask again for each dep "can this be finished before that one is merged?". No longer true -> `tk undep`. Run the SKILL.md search for the NEW files and classes; add deps / links.
    - Blocking: each dependent still needs THIS outcome? If not -> `tk undep <dependent> <id>`; if it now needs more -> note there.
-   - Every change gets a note on the blocked ticket: `Blocked by <id>: <reason>` / `No longer blocked by <id>: <reason>`.
+   - Every change gets a note on the blocked ticket: `tk dep ... --reason "<reason>"` / `tk undep ... --reason "<reason>"` write `Blocked by <id>: <reason>` / `No longer blocked by <id>: <reason>`. No `Note:` line in the output (plugin not installed) -> `tk add-note` by hand.
 4. RECORD: `tk add-note <id> "Edited: <what changed and why>"`. Never delete or rewrite old notes.
 5. VERIFY: `tk dep cycle`, `tk dep tree <id>`; tell the user whether the ticket and its dependents are in `tk ready` or `tk blocked`.
 
@@ -19,4 +19,4 @@ Read `SKILL.md` first. Body and front matter are edited in `.tickets/<id>.md`; s
 
 **Merging duplicates:** keep the older / richer ticket, copy unique facts into it as a note, re-point the other one's dependents to it, close the other as `Closed: duplicate of <id>`.
 
-**Closed tickets are not rewritten:** reopen with a `Reopened: <reason>` note, or open a new linked ticket.
+**Closed tickets are not rewritten:** reopen with `tk reopen <id> -m "<reason>"` (no plugin: a `Reopened: <reason>` note + `tk super reopen <id>`), or open a new linked ticket.

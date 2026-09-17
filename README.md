@@ -102,10 +102,17 @@ Bundled plugins (ticket-extras):
   migrate-beads            Import tickets from .beads/issues.jsonl (requires jq)
 
 Official plugins (installed separately):
+  dep <id> <dep-id> --reason X     Guarded dep (shadows the built-in): rejects self-deps and
+                           cycles, notes 'Blocked by <dep-id>: X', prints ready/blocked state
+  undep <id> <dep-id> --reason X   Guarded undep: notes 'No longer blocked by <dep-id>: X'
+                           (--no-note instead of --reason skips the note; dep tree / dep cycle unchanged)
   find [--all] [-T X] <pattern>...   Search title, body and notes (case-insensitive regex,
                            patterns OR-ed); closed tickets only with --all; exit 1 on no match
   lint [--conventions] [--strict]    Check tickets for broken graph invariants
   impact [--porcelain] <id>          Show what closing a ticket would change
+  start <id> [--force]     Guarded start: refuse tickets with open blockers and closed tickets
+  reopen <id> -m <reason> [--in-progress] [--force]
+                           Guarded reopen: write a 'Reopened:' note, report re-blocked dependents
   close <id> --reason done|wontdo|duplicate|superseded [-m text] [--ref id] [--force]
                            Guarded close, shadows the built-in (needs impact): refuses open
                            blockers/children, writes the Closed: note, lists what became ready
@@ -150,7 +157,7 @@ echo "Created $id, doing extra stuff..."
 
 Use `tk super <cmd>` to bypass plugins and run the built-in directly.
 
-**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. `ticket-close` shadows `tk close` with a guard: `tk close <id> --reason done|wontdo|duplicate|superseded` refuses a ticket with open blockers or open children (and, for the reasons that deliver nothing, one that open tickets still depend on), writes the `Closed: <resolution>` note and prints which tickets became ready; it needs `ticket-impact`, `--force` overrides the guard and `tk super close` bypasses it. None of them is part of `ticket-extras`: copy or symlink `plugins/ticket-lint`, `plugins/ticket-find`, `plugins/ticket-impact` and `plugins/ticket-close` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint`, `ticket-find`, `ticket-impact` and `ticket-close` packages.
+**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. `ticket-start` and `ticket-reopen` shadow the built-in `tk start` and `tk reopen` with guards: `tk start <id>` refuses a ticket with open blockers (`--force` overrides) and a closed ticket, and `tk reopen <id> -m <reason> [--in-progress]` writes a `Reopened:` note and reports which dependents went back to blocked. Both need `ticket-impact` on your PATH; `tk super start` / `tk super reopen` run the unguarded built-ins. `ticket-close` shadows `tk close` with a guard: `tk close <id> --reason done|wontdo|duplicate|superseded` refuses a ticket with open blockers or open children (and, for the reasons that deliver nothing, one that open tickets still depend on), writes the `Closed: <resolution>` note and prints which tickets became ready; it needs `ticket-impact`, `--force` overrides the guard and `tk super close` bypasses it. `ticket-dep` (with its `ticket-undep` symlink) shadows the built-in `tk dep` / `tk undep`: it rejects self-dependencies and cycles and requires a `--reason`, which it records as a note on the blocked ticket; `tk super dep` bypasses it. None of them is part of `ticket-extras`: copy or symlink `plugins/ticket-lint`, `plugins/ticket-find`, `plugins/ticket-impact`, `plugins/ticket-start`, `plugins/ticket-reopen`, `plugins/ticket-close` and `plugins/ticket-dep` (with the `plugins/ticket-undep` symlink) into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint`, `ticket-find`, `ticket-impact`, `ticket-start`, `ticket-reopen`, `ticket-close` and `ticket-dep` packages.
 
 ## Testing
 
