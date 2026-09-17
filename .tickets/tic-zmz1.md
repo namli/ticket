@@ -1,6 +1,6 @@
 ---
 id: tic-zmz1
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-09-17T11:29:13Z
@@ -18,3 +18,13 @@ Open question from the brainstorming session, not yet answered by the user. It s
 
 User has chosen one option; choice and reason recorded as a note here and on the three guard tickets; their titles/designs adjusted if the choice is not A.
 
+
+## Notes
+
+**2026-09-17T15:15:00Z**
+
+Decision (user, 2026-09-17): option A - plugins shadow the built-in names. Reason: plugin dispatch (ticket:1334) checks PATH before built-ins, so shadowing needs no core change and keeps the fork mergeable with upstream wedow/ticket; an agent typing the built-in name from habit still hits the guard; escape hatches are 'tk super <cmd>' and --force. Caveat: the guard exists only where the plugins are on PATH, so the skill must fail loudly when they are missing (see tic-x75b). Rejected: B keeps a manual 'never tk close' rule in the skill, C diverges the fork from upstream, D does not reach the epic's goal.
+
+**2026-09-17T15:16:19Z**
+
+Closed: done - option A chosen, recorded on tic-yxrw, tic-6rw0, tic-mwhy

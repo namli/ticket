@@ -32,3 +32,7 @@ Blocked by tic-zmz1: plugin name and whether it shadows `tk close` are not decid
 **2026-09-17T11:29:13Z**
 
 Blocked by tic-5lpp: close reports newly ready tickets and refuses on false-ready dependents by calling `tk impact --ids-ready` instead of duplicating the graph logic
+
+**2026-09-17T15:15:00Z**
+
+Guard style decided in tic-zmz1: option A - plugins/ticket-close shadows built-in 'tk close'. Reason: plugin dispatch (ticket:1334) checks PATH before built-ins, so shadowing needs no core change and keeps the fork mergeable with upstream wedow/ticket; an agent typing the built-in name from habit still hits the guard; escape hatches are 'tk super <cmd>' and --force. Caveat: the guard exists only where the plugins are on PATH, so the skill must fail loudly when they are missing (see tic-x75b).

@@ -32,3 +32,7 @@ Blocked by tic-zmz1: plugin names and whether they shadow `tk dep` / `tk undep` 
 **2026-09-17T13:11:34Z**
 
 Related tic-seki: `tk dep cycle` reports false cycles after the first real one; do not rely on its output in the dep guard until that is fixed (write the reachability walk in the plugin, as the design already says).
+
+**2026-09-17T15:15:00Z**
+
+Guard style decided in tic-zmz1: option A - plugins/ticket-dep and plugins/ticket-undep shadow built-in 'tk dep' / 'tk undep' ('tk dep tree' and 'tk dep cycle' must keep working through the plugin). Reason: plugin dispatch (ticket:1334) checks PATH before built-ins, so shadowing needs no core change and keeps the fork mergeable with upstream wedow/ticket; an agent typing the built-in name from habit still hits the guard; escape hatches are 'tk super <cmd>' and --force. Caveat: the guard exists only where the plugins are on PATH, so the skill must fail loudly when they are missing (see tic-x75b).
