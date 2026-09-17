@@ -105,6 +105,9 @@ Official plugins (installed separately):
   find [--all] [-T X] <pattern>...   Search title, body and notes (case-insensitive regex,
                            patterns OR-ed); closed tickets only with --all; exit 1 on no match
   lint [--conventions] [--strict]    Check tickets for broken graph invariants
+  start <id> [--force]     Guarded start: refuse tickets with open blockers and closed tickets
+  reopen <id> -m <reason> [--in-progress] [--force]
+                           Guarded reopen: write a 'Reopened:' note, report re-blocked dependents
 
 Searches parent directories for .tickets/ (override with TICKETS_DIR env var)
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
@@ -146,7 +149,7 @@ echo "Created $id, doing extra stuff..."
 
 Use `tk super <cmd>` to bypass plugins and run the built-in directly.
 
-**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. None of them is part of `ticket-extras`: copy or symlink `plugins/ticket-lint`, `plugins/ticket-find` and `plugins/ticket-impact` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint`, `ticket-find` and `ticket-impact` packages.
+**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. `ticket-start` and `ticket-reopen` shadow the built-in `tk start` and `tk reopen` with guards: `tk start <id>` refuses a ticket with open blockers (`--force` overrides) and a closed ticket, and `tk reopen <id> -m <reason> [--in-progress]` writes a `Reopened:` note and reports which dependents went back to blocked. Both need `ticket-impact` on your PATH; `tk super start` / `tk super reopen` run the unguarded built-ins. None of them is part of `ticket-extras`: copy or symlink `plugins/ticket-lint`, `plugins/ticket-find`, `plugins/ticket-impact`, `plugins/ticket-start` and `plugins/ticket-reopen` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint`, `ticket-find`, `ticket-impact`, `ticket-start` and `ticket-reopen` packages.
 
 ## Testing
 

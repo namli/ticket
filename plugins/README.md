@@ -189,3 +189,51 @@ awk '$1 == "ready" { print $2 }' <<<"$out"   # tickets that become ready
 ```
 
 Requires only bash, POSIX awk, `find` and `grep`.
+
+## ticket-start
+
+`tk start <id> [--force]` shadows the built-in `tk start`, which starts anything - including a ticket whose blockers are still open. It accepts one full or partial ID; flags may come before or after it.
+
+| Ticket | Result |
+|---|---|
+| has open blockers (any dependency that is not `closed`, dangling IDs included) | refused, exit 1; `--force` starts it anyway, prints a `Warning:` and writes the note `Forced start: open blockers <ids>` |
+| is `closed` | always refused, exit 1, also with `--force`: starting a closed ticket is a reopen without a reason - use `tk reopen <id> -m <reason> --in-progress` |
+| is `in_progress` | `<id> is already in progress`, exit 0, nothing changes |
+| otherwise | `Updated <id> -> in_progress` |
+
+```
+$ tk start nw-5c46
+Error: nw-5c46 has open blockers: nw-1d09
+Use --force to start anyway, or 'tk super start' to bypass the guard
+```
+
+Exit codes: 0 started or already in progress, 1 refused / ticket not found or ambiguous ID or an `id:` field that does not match the file name / `ticket-impact` missing, 2 usage error (including an empty ID) or no tickets directory.
+
+The guard reads its facts from `tk impact --porcelain` and changes the ticket only through `tk super start` and `tk super add-note`. `tk super start <id>` runs the unguarded built-in.
+
+Requires bash, POSIX awk and the `ticket-impact` plugin.
+
+## ticket-reopen
+
+`tk reopen <id> -m <reason> [--in-progress] [--force]` shadows the built-in `tk reopen`, which silently re-blocks dependents, always sets `open` and records nothing.
+
+| Flag | Effect |
+|---|---|
+| `-m <reason>` | Required, not empty. Written as the note `Reopened: <reason>`. |
+| `--in-progress` | Set `in_progress` instead of `open`. Refused (exit 1) when the ticket has open blockers - the case `tk start` refuses. |
+| `--force` | With `--in-progress`: reopen despite open blockers; prints a `Warning:` and adds a second note line `Forced: open blockers <ids>`. |
+
+```
+$ tk reopen nw-5c46 -m "reconnect loop under packet loss"
+Updated nw-5c46 -> open
+Note: Reopened: reconnect loop under packet loss
+Re-blocked: nw-7a21
+```
+
+`Re-blocked:` lists the dependents whose only open blocker is now the reopened ticket, i.e. the ones that leave `tk ready`; dependents that were already blocked by something else are not listed. With none it prints `Nothing was re-blocked`. A ticket that is not closed is left alone: `<id> is not closed (status: <status>) - nothing to reopen`, exit 0, no note - so an `in_progress` ticket is never demoted to `open`. A plain reopen (without `--in-progress`) is never refused.
+
+Exit codes: 0 reopened or nothing to reopen, 1 refused / ticket not found or ambiguous ID or an `id:` field that does not match the file name / `ticket-impact` missing, 2 usage error (including a missing or empty `-m`) (including an empty ID) or no tickets directory.
+
+The facts come from one `tk impact --porcelain` call taken while the ticket is still closed; the note and the status go through `tk super add-note` and `tk super status`. `tk super reopen <id>` runs the unguarded built-in.
+
+Requires bash, POSIX awk and the `ticket-impact` plugin.
