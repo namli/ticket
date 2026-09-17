@@ -800,6 +800,14 @@ def step_ticket_has_body_line(context, ticket_id, text):
     ticket_path.write_text(ticket_path.read_text() + f'\n{text}\n')
 
 
+@given(r'an empty ticket file "(?P<ticket_id>[^"]+)" exists')
+def step_empty_ticket_file(context, ticket_id):
+    """Create a 0-byte ticket file."""
+    ticket_path = _ticket_file(context, ticket_id)
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text('')
+
+
 @then(r'the exit code should be (?P<code>\d+)')
 def step_exit_code(context, code):
     assert context.returncode == int(code), \

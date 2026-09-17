@@ -23,11 +23,26 @@ Feature: Ticket Lint
     Then the exit code should be 0
     And the output should be empty
 
+  Scenario: A 0-byte ticket file is reported
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And an empty ticket file "lint-0002" exists
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output should be ".tickets/lint-0002.md:1: error: empty file [id-mismatch]"
+
   Scenario: Unknown option is a usage error
     Given a ticket exists with ID "lint-0001" and title "First"
     When I run "ticket lint --bogus"
     Then the exit code should be 2
     And the error output should contain "Unknown option: --bogus"
+
+  Scenario: Help flag
+    When I run "ticket lint --help"
+    Then the exit code should be 0
+    And the output should contain "Usage: tk lint"
+    When I run "ticket lint -h"
+    Then the exit code should be 0
+    And the output should contain "Usage: tk lint"
 
   Scenario: No tickets directory is an environment error
     Given the tickets directory does not exist
@@ -59,7 +74,7 @@ Feature: Ticket Lint
     Then the exit code should be 1
     And the output should contain ".tickets/lint-0001.md:1: error: missing id field [id-mismatch]"
 
-  Scenario: Invalid status is reported even on a ticket that is not open
+  Scenario: Invalid status
     Given a ticket exists with ID "lint-0001" and title "First"
     And ticket "lint-0001" has raw field "status" set to "done"
     When I run "ticket lint"
@@ -112,6 +127,18 @@ Feature: Ticket Lint
     And the output line 1 should contain ".tickets/lint-0001.md:4:"
     And the output line 2 should contain ".tickets/lint-0001.md:8:"
     And the output line 3 should contain ".tickets/lint-0002.md:4:"
+
+  Scenario: Line numbers sort numerically
+    Given a ticket exists with ID "lint-0001" and title "First" with parent "gone-0000"
+    And ticket "lint-0001" depends on "lint-0001"
+    And ticket "lint-0001" has no field "type"
+    And ticket "lint-0001" has raw field "external-ref" set to "x-1"
+    And ticket "lint-0001" has raw field "type" set to "spike"
+    When I run "ticket lint"
+    Then the output line count should be 3
+    And the output line 1 should contain ".tickets/lint-0001.md:4:"
+    And the output line 2 should contain ".tickets/lint-0001.md:8:"
+    And the output line 3 should contain ".tickets/lint-0001.md:10:"
 
   Scenario: Dependency on a missing ticket
     Given a ticket exists with ID "lint-0001" and title "First"
@@ -203,6 +230,12 @@ Feature: Ticket Lint
     And the output line 1 should contain ".tickets/lint-0001.md:9: error: parent chain leads back to this ticket [parent-cycle]"
     And the output line 2 should contain ".tickets/lint-0002.md:9: error: parent chain leads back to this ticket [parent-cycle]"
 
+  Scenario: Self-parent
+    Given a ticket exists with ID "lint-0001" and title "First" with parent "lint-0001"
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output should be ".tickets/lint-0001.md:9: error: parent chain leads back to this ticket [parent-cycle]"
+
   Scenario: Open child of a closed parent
     Given a ticket exists with ID "lint-0001" and title "Parent"
     And a ticket exists with ID "lint-0002" and title "Child" with parent "lint-0001"
@@ -212,15 +245,24 @@ Feature: Ticket Lint
     And the output should be ".tickets/lint-0002.md:9: warning: parent lint-0001 is closed but this ticket is open [open-child-of-closed]"
 
   Scenario: Closed tickets are history and get no findings
-    Given a ticket exists with ID "lint-0001" and title "First"
+    Given a ticket exists with ID "lint-0001" and title "First" with parent "gone-0000"
     And ticket "lint-0001" depends on "gone-0000"
     And ticket "lint-0001" depends on "lint-0001"
     And ticket "lint-0001" has a one-way link to "gone-0000"
     And ticket "lint-0001" has raw field "priority" set to "high"
+    And ticket "lint-0001" has raw field "type" set to "spike"
     And ticket "lint-0001" has status "closed"
     When I run "ticket lint"
     Then the exit code should be 0
     And the output should be empty
+
+  Scenario: Closed ticket still gets id and status findings
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And ticket "lint-0001" has raw field "id" set to "other-9999"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output should contain "[id-mismatch]"
 
   # --- Convention rules ---
 
@@ -258,3 +300,21 @@ Feature: Ticket Lint
     When I run "ticket lint --conventions --strict"
     Then the exit code should be 0
     And the output should be empty
+
+  Scenario: A heading inside a note does not end the Notes section
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And ticket "lint-0001" has a note "## Sub heading"
+    And ticket "lint-0001" has a note "Closed: done - shipped"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint --conventions"
+    Then the exit code should be 0
+    And the output should be empty
+
+  Scenario: A Closed line outside the Notes section is not a note
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And ticket "lint-0001" has body line "Closed: done - not a note"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint --conventions"
+    Then the exit code should be 0
+    And the output line count should be 1
+    And the output line 1 should contain "[close-note]"

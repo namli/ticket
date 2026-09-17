@@ -69,7 +69,7 @@ The format is the one compilers use, so paths are clickable in terminals and edi
 
 | Rule | Level | Meaning |
 |---|---|---|
-| `id-mismatch` | error | `id:` is missing or differs from the file name |
+| `id-mismatch` | error | `id:` is missing or differs from the file name (also: empty file) |
 | `invalid-status` | error | status is not `open`, `in_progress` or `closed` |
 | `invalid-priority` | error | priority is not 0-4 |
 | `self-dep` | error | ticket depends on itself |
@@ -90,7 +90,7 @@ Closed tickets are history: apart from `id-mismatch`, `invalid-status` and `clos
 | `--conventions` | also check the note conventions of the `managing-tk-tickets` skill |
 | `--strict` | warnings fail the run too |
 
-Exit codes: `0` no errors, `1` errors (or warnings with `--strict`), `2` unknown option or no `.tickets` directory.
+Exit codes: `0` no errors, `1` errors (or warnings with `--strict`), `2` unknown option or no `.tickets` directory found (a `TICKETS_DIR` that is set but missing is rejected by `tk` itself with exit 1).
 
 Requires only bash, POSIX awk and `sort`.
 

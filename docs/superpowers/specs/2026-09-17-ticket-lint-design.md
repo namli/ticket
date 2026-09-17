@@ -30,7 +30,7 @@ Exit codes:
 |---|---|
 | 0 | No errors (warnings allowed unless `--strict`). Also for an empty tickets directory. |
 | 1 | At least one error, or at least one warning with `--strict`. |
-| 2 | Unknown flag or argument, or no tickets directory (`TICKETS_DIR` unset or not a directory). Message on stderr. |
+| 2 | Unknown flag or argument, or no tickets directory (`TICKETS_DIR` unset or not a directory). Message on stderr. When run through `tk`, a `TICKETS_DIR` that is set but missing is rejected by the core dispatcher with exit 1 before the plugin starts. |
 
 ## Output
 
@@ -58,7 +58,7 @@ Principle: a closed ticket is history and gets no findings, except for the two r
 
 | Rule | Level | Reported on | Condition |
 |---|---|---|---|
-| `id-mismatch` | error | any ticket, line of `id:` | `id:` is missing or differs from the file name without `.md` |
+| `id-mismatch` | error | any ticket, line of `id:` | `id:` is missing or differs from the file name without `.md`; a 0-byte file is reported as `empty file` |
 | `invalid-status` | error | any ticket, line of `status:` | status is not `open`, `in_progress` or `closed` |
 | `invalid-priority` | error | non-closed, line of `priority:` | priority is not a single digit 0-4 |
 | `self-dep` | error | non-closed, line of `deps:` | the ticket's own id is in `deps` |
