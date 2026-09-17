@@ -31,7 +31,7 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | Impact printed, including "no impact". |
-| 1 | Ticket not found, or partial ID ambiguous. Message on stderr, same wording as `ticket-edit`: `Error: ticket '<id>' not found`, `Error: ambiguous ID '<id>' matches multiple tickets`. |
+| 1 | Ticket not found, or partial ID ambiguous. Message on stderr, same wording as `ticket-edit`: `Error: ticket '<id>' not found`, `Error: ambiguous ID '<id>' matches multiple tickets`. Also when no ticket carries the resolved ID in its `id:` field: `Error: no ticket with id <id> (file name and id field differ?)`. |
 | 2 | Unknown flag, missing `<id>`, more than one `<id>`, or no tickets directory (`TICKETS_DIR` unset or not a directory). Usage or message on stderr. When run through `tk`, a `TICKETS_DIR` that is set but missing is rejected by the core dispatcher with exit 1 before the plugin starts. |
 
 Partial IDs are resolved inside the plugin with the same `find "$TICKETS_DIR" -maxdepth 1 -name "*<id>*.md"` logic as `plugins/ticket-edit` (exact file name first, then a unique partial match). Plugins are standalone files, so the few lines are copied rather than parsed out of `tk super show`.
@@ -56,6 +56,8 @@ Details:
 - The target never appears in its own lists: a self-dependency is not a blocker, a self-parent is not a child.
 - A dependent that names the target twice in `deps` is reported once; duplicate IDs in a `blocked` list are collapsed.
 - Closed dependents and closed children are ignored.
+- Any status other than `closed` counts as open: `in_progress`, but also a missing or unknown status. `tk ready` and `tk blocked` list only `open` and `in_progress` tickets, so impact can name a ticket they do not show.
+- IDs are compared as strings (`100` and `1e2` are different tickets). IDs and statuses are assumed to contain no whitespace and no commas, which holds for everything `tk` generates; the porcelain format relies on it.
 
 ## Output
 

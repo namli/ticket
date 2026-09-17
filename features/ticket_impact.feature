@@ -244,3 +244,34 @@ Feature: Ticket Impact
     Then the output line 1 should contain "status closed"
     And the output line 2 should contain "ready imp-0002"
     And the output line count should be 2
+
+  # --- Regression guards from the final review ---
+
+  Scenario: IDs that look like equal numbers are different tickets
+    Given a ticket exists with ID "100" and title "Target"
+    And a ticket exists with ID "1e2" and title "Looks equal"
+    And a ticket exists with ID "7" and title "Depends on the other"
+    And ticket "7" depends on "1e2"
+    When I run "ticket impact --porcelain 100"
+    Then the exit code should be 0
+    And the output should be "status open"
+
+  Scenario: An in-progress dependent becomes ready
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Started"
+    And ticket "imp-0002" depends on "imp-0001"
+    And ticket "imp-0002" has status "in_progress"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "Becomes ready:"
+    And the output should contain "- imp-0002 [in_progress] Started"
+
+  Scenario: A dependent is reported once and duplicate blockers collapse
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Waiting"
+    And a ticket exists with ID "imp-0003" and title "Other blocker"
+    And ticket "imp-0002" has raw field "deps" set to "[imp-0001, imp-0003, imp-0001, imp-0003]"
+    When I run "ticket impact --porcelain imp-0001"
+    Then the output line 1 should contain "status open"
+    And the output line 2 should contain "blocked imp-0002 imp-0003"
+    And the output should not contain "imp-0003,imp-0003"
+    And the output line count should be 2

@@ -55,6 +55,9 @@ fi
 target=$(basename "$file" .md)
 
 LC_ALL=C awk -v target="$target" -v porcelain="$porcelain" '
+# IDs are strings even when they look like numbers (100 vs 1e2): force string comparison
+BEGIN { target = target "" }
+
 # --- Loading: one pass over all ticket files ---
 FNR == 1 {
     if (seen) store()
@@ -97,7 +100,7 @@ function sorted(list,    n, arr, i, j, tmp, out) {
     }
     out = ""
     for (i = 1; i <= n; i++)
-        if (arr[i] != "" && (i == 1 || arr[i] != arr[i - 1])) out = add(out, arr[i])
+        if (arr[i] != "" && (i == 1 || (arr[i] "") != (arr[i - 1] ""))) out = add(out, arr[i])
     return out
 }
 

@@ -156,6 +156,8 @@ last-child <parent-id>
 
 `status` is always the first line. Kinds appear in this order, lines of one kind are sorted by ID, and a kind without facts prints nothing. Consumers must match on the first word and ignore kinds they do not know; existing kinds and their field order do not change within 1.x.
 
+Any status other than `closed` counts as open. IDs and statuses are assumed to contain no whitespace and no commas, which holds for everything `tk` generates.
+
 ```bash
 out=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
 if grep -qE '^blocker |^child ' <<<"$out"; then
