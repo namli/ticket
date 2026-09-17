@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# tk-plugin: Guarded dep/undep: reject self-deps and cycles, record the reason
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+# One script, two commands: plugins/ticket-undep is a symlink to this file
+mode="${0##*/}"
+mode="${mode#tk-}"
+mode="${mode#ticket-}"
+[[ "$mode" == "undep" ]] || mode="dep"
+
+usage() {
+    if [[ "$mode" == "dep" ]]; then
+        echo "Usage: tk dep <id> <dep-id> (--reason <text> | --no-note)"
+        echo "       tk dep tree [--full] <id>   show dependency tree"
+        echo "       tk dep cycle                find dependency cycles"
+    else
+        echo "Usage: tk undep <id> <dep-id> (--reason <text> | --no-note)"
+    fi
+    echo "  --reason <text>  why the dependency changes; written as a note on <id>"
+    echo "  --no-note        change the dependency without writing a note"
+    echo "Bypass the guard: tk super $mode <id> <dep-id>"
+}
+
+die_usage() {
+    echo "Error: $1" >&2
+    usage >&2
+    exit 2
+}
+
+if [[ -z "${TK_SCRIPT:-}" ]]; then
+    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
+    exit 2
+fi
+
+# tree and cycle are not guarded: hand them to the built-in unchanged
+if [[ "$mode" == "dep" && ( "${1:-}" == "tree" || "${1:-}" == "cycle" ) ]]; then
+    exec "$TK_SCRIPT" super dep "$@"
+fi
+
+reason="" have_reason=0 no_note=0
+ids=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --reason)
+            [[ $# -ge 2 ]] || die_usage "--reason requires a text"
+            reason="$2"; have_reason=1; shift 2 ;;
+        --reason=*) reason="${1#--reason=}"; have_reason=1; shift ;;
+        --no-note) no_note=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; while [[ $# -gt 0 ]]; do ids+=("$1"); shift; done ;;
+        -*) die_usage "unknown option: $1" ;;
+        *) ids+=("$1"); shift ;;
+    esac
+done
+
+[[ ${#ids[@]} -eq 2 ]] || die_usage "expected <id> and <dep-id>"
+if [[ $have_reason -eq 1 && $no_note -eq 1 ]]; then
+    die_usage "--reason and --no-note are mutually exclusive"
+fi
+if [[ $have_reason -eq 0 && $no_note -eq 0 ]]; then
+    die_usage "--reason <text> is required (or pass --no-note)"
+fi
+if [[ $have_reason -eq 1 && -z "${reason//[[:space:]]/}" ]]; then
+    die_usage "--reason must not be empty"
+fi
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+# Full ID on stdout; same lookup and error texts as ticket_path in core
+resolve_id() {
+    local id="$1" matches count
+    read -r id <<< "$id"
+    if [[ -f "$TICKETS_DIR/$id.md" ]]; then
+        echo "$id"
+        return 0
+    fi
+    matches=$(find "$TICKETS_DIR" -maxdepth 1 -name "*${id}*.md" 2>/dev/null | head -2)
+    count=$(printf '%s\n' "$matches" | grep -c . || true)
+    if [[ "$count" -eq 1 ]]; then
+        basename "$matches" .md
+    elif [[ "$count" -gt 1 ]]; then
+        echo "Error: ambiguous ID '$id' matches multiple tickets" >&2
+        return 1
+    else
+        echo "Error: ticket '$id' not found" >&2
+        return 1
+    fi
+}
+
+# Front matter field of one ticket
+field_of() {
+    awk -v key="$2" '
+    FNR == 1 { if ($0 != "---") exit; next }
+    /^---$/ { exit }
+    index($0, key ":") == 1 {
+        v = substr($0, length(key) + 2)
+        gsub(/^[ \t]+|[ \t]+$/, "", v)
+        print v
+        exit
+    }' "$TICKETS_DIR/$1.md"
+}
+
+# deps of one ticket, one ID per line
+deps_of() {
+    field_of "$1" deps | awk '{
+        gsub(/[][]/, ""); gsub(/[ \t]/, "")
+        n = split($0, a, ",")
+        for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
+    }'
+}
+
+# Exact element test (core matches substrings)
+has_dep() {
+    local d
+    while IFS= read -r d; do
+        [[ "$d" == "$2" ]] && return 0
+    done < <(deps_of "$1")
+    return 1
+}
+
+write_note() {
+    "$TK_SCRIPT" super add-note "$1" "$2" >/dev/null
+    echo "Note: $2"
+}
+
+id=$(resolve_id "${ids[0]}") || exit 1
+dep_id=$(resolve_id "${ids[1]}") || exit 1
+
+if [[ "$mode" == "dep" ]]; then
+    if [[ "$id" == "$dep_id" ]]; then
+        echo "Error: $id cannot depend on itself" >&2
+        echo "Use 'tk super dep' to bypass the guard" >&2
+        exit 1
+    fi
+    if has_dep "$id" "$dep_id"; then
+        echo "Dependency already exists"
+        exit 0
+    fi
+    out=$("$TK_SCRIPT" super dep "$id" "$dep_id") || { [[ -n "$out" ]] && echo "$out" >&2; exit 1; }
+    if ! has_dep "$id" "$dep_id"; then
+        echo "Error: tk super dep did not add $dep_id to $id (core matched it as a substring of an existing dependency)" >&2
+        exit 1
+    fi
+    echo "$out"
+    [[ $no_note -eq 1 ]] || write_note "$id" "Blocked by $dep_id: $reason"
+else
+    if ! has_dep "$id" "$dep_id"; then
+        echo "Dependency not found"
+        exit 1
+    fi
+    out=$("$TK_SCRIPT" super undep "$id" "$dep_id") || { [[ -n "$out" ]] && echo "$out" >&2; exit 1; }
+    if has_dep "$id" "$dep_id"; then
+        echo "Error: tk super undep did not remove $dep_id from $id" >&2
+        exit 1
+    fi
+    echo "$out"
+    [[ $no_note -eq 1 ]] || write_note "$id" "No longer blocked by $dep_id: $reason"
+fi
