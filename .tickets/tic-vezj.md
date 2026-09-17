@@ -1,6 +1,6 @@
 ---
 id: tic-vezj
-status: open
+status: closed
 deps: []
 links: [tic-xj6g]
 created: 2026-09-17T11:29:13Z
@@ -28,3 +28,11 @@ Scenarios in features/ticket_find.feature: match in body; match in notes; closed
 **2026-09-17T13:11:34Z**
 
 Related tic-xj6g: do not copy gsub(/[\[\] ]/...) from plugins/ticket-ls into ticket-find; use /[][]/ as plugins/ticket-lint does.
+
+**2026-09-17T15:36:42Z**
+
+Design decisions confirmed by namli on 2026-09-17, deviating from the Design section: (1) output is 'id [Pn][status] - title' as written here - plugins/ticket-ls actually prints 'id [status] - title <- [deps]'; (2) only --all, no -a short form: -a means assignee in ls/ready/blocked/closed; (3) awk-only matching, no rg/_grep prefilter: front matter must be excluded from the search, which needs awk anyway, and rg/awk regex dialects differ. Exit codes: 0 match, 1 no match, 2 usage error / invalid regex / no .tickets.
+
+**2026-09-17T15:39:15Z**
+
+Closed: done - plugins/ticket-find 1.0.0 (tk find [--all] [-T tag] <pattern>...), 20 scenarios in features/ticket_find.feature, make test 180/180 green; README.md, plugins/README.md, CHANGELOG.md and SKILL.md updated; not in pkg/extras.txt

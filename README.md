@@ -101,6 +101,11 @@ Bundled plugins (ticket-extras):
   query [jq-filter]        Output tickets as JSON, optionally filtered (requires jq)
   migrate-beads            Import tickets from .beads/issues.jsonl (requires jq)
 
+Official plugins (installed separately):
+  find [--all] [-T X] <pattern>...   Search title, body and notes (case-insensitive regex,
+                           patterns OR-ed); closed tickets only with --all; exit 1 on no match
+  lint [--conventions] [--strict]    Check tickets for broken graph invariants
+
 Searches parent directories for .tickets/ (override with TICKETS_DIR env var)
 Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 ```
@@ -141,7 +146,7 @@ echo "Created $id, doing extra stuff..."
 
 Use `tk super <cmd>` to bypass plugins and run the built-in directly.
 
-**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. Neither is part of `ticket-extras`: copy or symlink `plugins/ticket-lint` and `plugins/ticket-impact` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint` / `ticket-impact` packages.
+**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. None of them is part of `ticket-extras`: copy or symlink `plugins/ticket-lint`, `plugins/ticket-find` and `plugins/ticket-impact` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint`, `ticket-find` and `ticket-impact` packages.
 
 ## Testing
 

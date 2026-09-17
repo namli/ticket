@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# tk-plugin: Search ticket titles, bodies and notes (open tickets by default)
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+usage() {
+    echo "Usage: tk find [--all] [-T tag] <pattern> [pattern...]"
+    echo "  Case-insensitive extended regex over title, body and notes; patterns are OR-ed"
+    echo "  --all          include closed tickets"
+    echo "  -T, --tag=X    only tickets tagged X"
+    echo "Exit: 0 match, 1 no match, 2 usage error"
+}
+
+include_closed=0 tag_filter=""
+patterns=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --all) include_closed=1; shift ;;
+        -T)
+            [[ $# -ge 2 ]] || { echo "Error: -T requires a tag" >&2; usage >&2; exit 2; }
+            tag_filter="$2"; shift 2 ;;
+        --tag=*) tag_filter="${1#--tag=}"; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; patterns+=("$@"); break ;;
+        -*) echo "Error: unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *) patterns+=("$1"); shift ;;
+    esac
+done
+
+if [[ ${#patterns[@]} -eq 0 ]]; then
+    usage >&2
+    exit 2
+fi
+for p in "${patterns[@]}"; do
+    [[ -n "$p" ]] || { echo "Error: empty pattern" >&2; exit 2; }
+done
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+shopt -s nullglob
+files=("$TICKETS_DIR"/*.md)
+[[ ${#files[@]} -eq 0 ]] && exit 1
+
+# Patterns travel through the environment: awk -v would mangle backslashes
+TK_FIND_PATTERNS=$(printf '%s\n' "${patterns[@]}")
+export TK_FIND_PATTERNS
+
+awk -v include_closed="$include_closed" -v tag_filter="$tag_filter" '
+BEGIN { npat = split(tolower(ENVIRON["TK_FIND_PATTERNS"]), pats, "\n") }
+FNR == 1 {
+    if (cur != "") emit()
+    n = split(FILENAME, parts, "/")
+    cur = parts[n]
+    sub(/\.md$/, "", cur)
+    status = ""; priority = ""; tags = ""; title = ""; matched = 0
+    # fm: 1 = inside front matter, 2 = body (or the file has no front matter)
+    fm = ($0 == "---") ? 1 : 2
+    if (fm == 1) next
+}
+fm == 1 && /^---$/ { fm = 2; next }
+fm == 1 {
+    if (/^status:/) status = value()
+    else if (/^priority:/) priority = value()
+    else if (/^tags:/) { tags = value(); gsub(/[][ ]/, "", tags) }
+    next
+}
+/^# / && title == "" { title = substr($0, 3) }
+!matched {
+    text = tolower($0)
+    for (i = 1; i <= npat; i++) if (text ~ pats[i]) { matched = 1; break }
+}
+END {
+    if (cur != "") emit()
+    exit found ? 0 : 1
+}
+function value(    v) {
+    v = substr($0, index($0, ":") + 1)
+    gsub(/^[ \t]+|[ \t]+$/, "", v)
+    return v
+}
+function has_tag(tags_str, tag,    i, n, arr) {
+    n = split(tags_str, arr, ",")
+    for (i = 1; i <= n; i++) if (arr[i] == tag) return 1
+    return 0
+}
+function emit() {
+    if (!matched) return
+    if (status == "closed" && !include_closed) return
+    if (tag_filter != "" && !has_tag(tags, tag_filter)) return
+    printf "%-8s [P%s][%s] - %s\n", cur, priority, status, title
+    found = 1
+}
+' "${files[@]}"

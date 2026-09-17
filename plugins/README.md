@@ -56,6 +56,27 @@ brew install ticket-core ticket-query    # Core + specific plugin
 3. Add to `pkg/extras.txt` if it should be in the extras bundle
 4. Commit and tag a release
 
+## ticket-find
+
+`tk find [--all] [-T tag] <pattern> [pattern...]` searches ticket content - the part `tk query` does not return - and prints one list line per matching ticket, sorted by ID:
+
+```
+$ tk find 'SessionStore' 'src/Auth/'
+nw-5c46  [P1][in_progress] - Add SSE connection management
+nw-7a21  [P2][open] - Expire idle sessions
+```
+
+Patterns are case-insensitive POSIX extended regexes matched line by line against the title, body and notes; front matter is not searched, so `tk find open` does not match every `status: open`. Several patterns are OR-ed. Use `--` before a pattern that starts with a dash.
+
+| Flag | Effect |
+|---|---|
+| `--all` | include closed tickets (there is no `-a` short form: `-a` means assignee in `ls`, `ready`, `blocked` and `closed`) |
+| `-T X`, `--tag=X` | only tickets tagged `X` (whole tag, like `tk ls -T`) |
+
+Exit codes follow `grep`: `0` at least one match, `1` no match, `2` usage error, invalid regex or no `.tickets` directory found.
+
+Requires only bash and POSIX awk.
+
 ## ticket-lint
 
 `tk lint [--conventions] [--strict]` checks every ticket in `.tickets/` in one pass and prints one finding per line, sorted by file and line:
