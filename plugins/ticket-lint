@@ -100,9 +100,74 @@ function check_fields(    f, id, v) {
     }
 }
 
+function check_deps(    f, id, i, d) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        if (is_closed(id)) continue
+        for (i = 1; i <= ndeps[id]; i++) {
+            d = dep[id, i]
+            if (d == id)
+                emit(id, line[id, "deps"], "error", "self-dep", "depends on itself")
+            else if (!(d in exists))
+                emit(id, line[id, "deps"], "error", "missing-dep", "depends on missing ticket " d)
+        }
+    }
+}
+
+function dfs(node, depth,    i, child) {
+    color[node] = 1
+    stack[depth] = node
+    for (i = 1; i <= ndeps[node]; i++) {
+        child = dep[node, i]
+        if (child == node || !(child in exists)) continue
+        if (color[child] == 1) record_cycle(child, depth)
+        else if (color[child] == 0) dfs(child, depth + 1)
+    }
+    color[node] = 2
+}
+
+function record_cycle(start, depth,    s, i, len, minidx, key, best, msg) {
+    for (s = depth; s > 0 && stack[s] != start; s--) ;
+    len = 0
+    for (i = s; i <= depth; i++) cyc[++len] = stack[i]
+    minidx = 1
+    for (i = 2; i <= len; i++) if ((cyc[i] "") < (cyc[minidx] "")) minidx = i
+    key = ""
+    for (i = 0; i < len; i++) key = key cyc[(minidx - 1 + i) % len + 1] ","
+    if (key in seen_cycle) return
+    seen_cycle[key] = 1
+    best = 0
+    for (i = 1; i <= len; i++)
+        if (!is_closed(cyc[i]) && (best == 0 || (cyc[i] "") < (cyc[best] ""))) best = i
+    if (best == 0) return
+    msg = ""
+    for (i = 0; i < len; i++) msg = msg cyc[(best - 1 + i) % len + 1] " -> "
+    emit(cyc[best], line[cyc[best], "deps"], "error", "dep-cycle", "dependency cycle: " msg cyc[best])
+}
+
+function check_cycles(    f) {
+    for (f = 1; f <= nfiles; f++)
+        if (color[files[f]] == 0) dfs(files[f], 0)
+}
+
+function check_state(    f, id, i, d) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        if (field[id, "status"] != "in_progress") continue
+        for (i = 1; i <= ndeps[id]; i++) {
+            d = dep[id, i]
+            if (d != id && (d in exists) && !is_closed(d))
+                emit(id, line[id, "status"], "warning", "blocked-in-progress", "in_progress but blocked by " field[d, "status"] " " d)
+        }
+    }
+}
+
 END {
     check_ids()
     check_fields()
+    check_deps()
+    check_cycles()
+    check_state()
     if (errors + warnings > 0)
         print plural(errors + 0, "error") ", " plural(warnings + 0, "warning") | "cat 1>&2"
     exit (errors > 0 || (strict && warnings > 0)) ? 1 : 0
