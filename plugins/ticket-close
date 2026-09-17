@@ -151,3 +151,12 @@ if ! "$TK_SCRIPT" super close "$id"; then
     exit 1
 fi
 echo "Note: $first_line"
+
+ready=$(facts_of ready)
+if [[ -n "$ready" ]]; then
+    echo "Now ready: $ready"
+else
+    echo "Nothing became ready"
+fi
+parent=$(facts_of last-child)
+[[ -z "$parent" ]] || echo "Last open child of $parent closed - consider closing $parent"

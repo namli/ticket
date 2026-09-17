@@ -346,3 +346,48 @@ Feature: Guarded Close
     And I run "ticket show cl-0001"
     Then the output should contain "Closed: done - shipped"
     And the output should not contain "Forced:"
+
+  # --- Report ---
+
+  Scenario: Unblocked dependents are reported, still blocked ones are not
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Becomes ready"
+    And a ticket exists with ID "cl-0003" and title "Still blocked"
+    And a ticket exists with ID "cl-0004" and title "Other blocker"
+    And ticket "cl-0002" depends on "cl-0001"
+    And ticket "cl-0003" depends on "cl-0001"
+    And ticket "cl-0003" depends on "cl-0004"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And the output line 3 should contain "Now ready: cl-0002"
+    And the output should not contain "cl-0003"
+
+  Scenario: Several unblocked dependents are listed in ID order
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0003" and title "Second"
+    And a ticket exists with ID "cl-0002" and title "First"
+    And ticket "cl-0003" depends on "cl-0001"
+    And ticket "cl-0002" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the output line 3 should contain "Now ready: cl-0002, cl-0003"
+
+  Scenario: Nothing became ready
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the output line 3 should contain "Nothing became ready"
+    And the output line count should be 3
+
+  Scenario: Parent hint when the last open child closes
+    Given a ticket exists with ID "cl-0001" and title "Parent"
+    And a ticket exists with ID "cl-0002" and title "Child" with parent "cl-0001"
+    When I run "ticket close cl-0002 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And the output line 4 should contain "Last open child of cl-0001 closed - consider closing cl-0001"
+
+  Scenario: No parent hint while a sibling is open
+    Given a ticket exists with ID "cl-0001" and title "Parent"
+    And a ticket exists with ID "cl-0002" and title "Child" with parent "cl-0001"
+    And a ticket exists with ID "cl-0003" and title "Sibling" with parent "cl-0001"
+    When I run "ticket close cl-0002 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And the output should not contain "Last open child"
