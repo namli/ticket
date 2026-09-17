@@ -17,7 +17,7 @@ An agent that types `tk start` / `tk reopen` from habit hits the guard, because 
 
 - No changes to the core `ticket` script.
 - No guard for `tk status <id> in_progress|open`. `status` is not shadowed.
-- No check for reopening a child of a closed parent. It is a graph inconsistency worth a `ticket-lint` rule, not a reason to refuse a reopen; recorded as a follow-up, not designed here.
+- No check for reopening a child of a closed parent. It is not a reason to refuse a reopen, and `tk lint` already reports it (`open-child-of-closed` warning).
 - No report of dependents that were already blocked by something else (the `blocked` porcelain lines): their state does not change. `tk impact <id>` shows them before the reopen.
 - No `target <full-id>` line in `tk impact --porcelain`; IDs are resolved through `tk super show`, as in `ticket-close`. `ticket-impact` stays at 1.0.0.
 - No skill rewrite (`tic-x75b`) beyond the minimal edits listed under Documentation.
@@ -56,7 +56,7 @@ Exit codes (same scheme as `ticket-impact`, `ticket-dep`, `ticket-close`):
 |---|---|
 | 0 | Status changed, or there was nothing to change (`start` on an `in_progress` ticket, `reopen` on a ticket that is not closed). |
 | 1 | A guard refused; `<id>` not found or ambiguous; `ticket-impact` is not on `PATH`; a delegated built-in failed. |
-| 2 | Usage error: unknown flag, missing or extra `<id>`, `reopen` without `-m` or with an empty one, `-m` without a value; or no tickets directory (`TICKETS_DIR` unset or not a directory). Message and usage on stderr. |
+| 2 | Usage error: unknown flag, missing or extra `<id>`, `reopen` without `-m` or with an empty one, `-m` without a value; no tickets directory (`TICKETS_DIR` unset or not a directory); or the plugin was run directly instead of through `tk` (`TK_SCRIPT` unset, as in `ticket-dep`). Message and usage on stderr. |
 
 ## Behaviour
 
