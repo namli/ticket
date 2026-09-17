@@ -17,7 +17,7 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 
 - ANY closed blocker counts as resolved, whatever the reason: a wrong close silently moves dependents to `tk ready`. `tk close` has no guards (closes blocked tickets and parents with open children, records no reason).
 - `tk reopen <id> -m "<reason>" [--in-progress]` (ticket-reopen plugin) writes the `Reopened:` note and reports the re-blocked dependents. Without the plugin the built-in silently re-blocks dependents, sets `open` and records nothing: write the note yourself and restore work in progress with `tk status <id> in_progress`.
-- Self-deps and cycles are accepted: run `tk dep cycle` after every dep change. `tk start` (ticket-start plugin) refuses blocked and closed tickets; the built-in starts anything - never start a blocked ticket, and use `--force` only when the user says so.
+- `tk dep` (ticket-dep plugin) refuses self-deps and cycles; the built-in accepts both: without the plugin run `tk dep cycle` after every dep change. `tk start` (ticket-start plugin) refuses blocked and closed tickets; the built-in starts anything - never start a blocked ticket, and use `--force` only when the user says so.
 - No command changes title / priority / tags / parent / body, and `tk edit` needs a terminal: edit `.tickets/<id>.md` directly. Status, deps, links, notes go ONLY through `tk`.
 - `tk query` returns front matter only; search content with `tk find`. `tk show <id>` renders **Blockers**, **Blocking**, **Children**.
 - `tk create` prints only the ID. Write it on ONE line: a `# comment` after a `\` ends the command and leaves a junk ticket. In double quotes escape `$`.
@@ -29,7 +29,7 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 | Pick work (only from here) | `tk ready` |
 | What waits on what | `tk show <id>`, `tk dep tree <id>`, `tk blocked` |
 | Filter | `tk ls --status=in_progress`, `tk ls --tag=x` |
-| Hard blocker / soft relation | `tk dep <blocked> <blocker>` / `tk link <a> <b>` |
+| Hard blocker / soft relation | `tk dep <blocked> <blocker> --reason "<reason>"` / `tk link <a> <b>` |
 | History | `tk add-note <id> "text"` (append-only, timestamped) |
 
 Search open tickets (content = `tk find`, tags = `tk query`); patterns are case-insensitive regexes, OR-ed; exit 1 = no hit:
@@ -50,7 +50,7 @@ ID=$(tk create "Imperative title" -t bug -p 2 --tags area,topic --external-ref P
 1. SEARCH open tickets for the files, classes and tags the new one touches; `tk show` every hit.
 2. CLASSIFY each hit: "can the new ticket be started AND finished before that one is merged?" No -> `tk dep`. Yes but same files or root cause -> `tk link`. Part of it -> `--parent`. Same problem -> no new ticket, `tk add-note` on the existing one. "Better first" is priority, not a dep; depend on the narrowest real blocker, never on an epic.
 3. BOTH DIRECTIONS: the new ticket may block existing ones -> `tk dep <existing> <new>`.
-4. After every dep: `tk add-note <blocked> "Blocked by <id>: <reason>"`.
+4. Every dep carries its reason: `tk dep <blocked> <blocker> --reason "<reason>"` writes the `Blocked by <id>: <reason>` note and refuses self-deps and cycles (`tk undep ... --reason` writes `No longer blocked by`). No `Note:` line in the output -> the ticket-dep plugin is not installed: `tk add-note <blocked> "Blocked by <id>: <reason>"` yourself.
 5. VERIFY: `tk dep cycle`; show `tk dep tree <id>`; say whether it landed in `tk ready` or `tk blocked`.
 
 ## Closing
@@ -82,4 +82,4 @@ Typo, wording, priority, tags -> edit the file. New facts -> `tk add-note`, not 
 | Closing a won't-do ticket, then asking about dependents | Settle **Blocking** before `tk close` |
 | Free-form closing note | `Closed: <resolution> - ...` prefix |
 | Staging `.tickets/` before the aftermath notes | Stage last |
-| Dep without a reason | `Blocked by <id>: <reason>` note |
+| Dep without a reason | `tk dep ... --reason`; no plugin -> `Blocked by <id>: <reason>` note |

@@ -56,6 +56,39 @@ brew install ticket-core ticket-query    # Core + specific plugin
 3. Add to `pkg/extras.txt` if it should be in the extras bundle
 4. Commit and tag a release
 
+## ticket-dep (and ticket-undep)
+
+`plugins/ticket-dep` shadows the built-in `tk dep`; `plugins/ticket-undep` is a symlink to it and shadows `tk undep`. One package, `ticket-dep`, installs both.
+
+```
+tk dep   <id> <dep-id> (--reason <text> | --no-note)
+tk undep <id> <dep-id> (--reason <text> | --no-note)
+tk dep tree [--full] <id>      unchanged, passed to the built-in
+tk dep cycle                   unchanged, passed to the built-in
+```
+
+```
+$ tk dep nw-5c46 nw-7a21 --reason "needs the session store"
+Added dependency: nw-5c46 -> nw-7a21
+Note: Blocked by nw-7a21: needs the session store
+nw-5c46 is blocked by: nw-7a21 [open]
+```
+
+What the guard adds to the built-in:
+
+- `tk dep A A` is refused.
+- A dependency that would close a cycle is refused and the cycle is shown (`A -> B -> C -> A`). Closed tickets count as edges, as in `tk lint`. The check does not rely on `tk dep cycle`.
+- "Already exists" / "not found" compare whole IDs; the built-in matches substrings of the `deps:` line. If the built-in refuses a dependency because of that, the plugin reports it (exit 1) instead of printing a false "already exists".
+- `tk undep` refuses (exit 1) when the built-in would damage another dependency: it removes the ID as an unanchored pattern, so removing `abc-001` next to `abc-0012`, or `a.b-0001` next to `axb-0001`, would corrupt `deps`. Such a dependency has to be removed by editing the ticket file. After every `undep` the plugin also checks that the other dependencies are unchanged.
+- `--reason <text>` is required and is written as a note on `<id>`: `Blocked by <dep-id>: <text>` for `dep`, `No longer blocked by <dep-id>: <text>` for `undep`. `--no-note` skips the note.
+- The last output line says where the ticket stands: `<id> is ready`, `<id> is blocked by: <dep> [<status>], ...` or `<id> is closed`.
+
+There is no `--force`: a self-dependency or a cycle is never legitimate. `tk super dep` / `tk super undep` run the built-in without the guard.
+
+Exit codes: `0` done (or the dependency was already there), `1` refused, ticket not found, `undep` of a dependency that is not there, or the built-in failed, `2` usage error or no `.tickets` directory found.
+
+Requires only bash, POSIX awk and `find`. The plugin never edits ticket files itself; every write goes through `tk super dep|undep|add-note`.
+
 ## ticket-find
 
 `tk find [--all] [-T tag] <pattern> [pattern...]` searches ticket content - the part `tk query` does not return - and prints one list line per matching ticket, sorted by ID:
