@@ -1,8 +1,8 @@
 ---
 id: tic-x75b
-status: open
+status: closed
 deps: [tic-5lpp, tic-yxrw, tic-6rw0, tic-mwhy, tic-vezj, tic-xg2z, tic-5cgv]
-links: []
+links: [tic-vsgg]
 created: 2026-09-17T11:29:13Z
 type: task
 priority: 2
@@ -52,3 +52,7 @@ Blocked by tic-xg2z: the skill can only drop a manual rule once the command that
 **2026-09-17T11:29:13Z**
 
 Blocked by tic-5cgv: the skill can only drop a manual rule once the command that enforces it exists
+
+**2026-09-17T20:23:19Z**
+
+Closed: done - SKILL.md 1273 -> 870 words (-32%, not the half targeted), editing.md 400 -> 356; fail-loud plugin check replaces every manual fallback; README Agent skill updated; re-tested on create, close, wont-do, reopen and no-plugins scenarios; follow-up tic-vsgg
