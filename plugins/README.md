@@ -318,3 +318,34 @@ After the close the plugin prints `Now ready: <ids>` (or `Nothing became ready`)
 Exit codes: 0 closed or already closed; 1 guard refused, ticket or `--ref` not found / ambiguous, `--ref` is the ticket itself, file name and id field of a ticket differ, `ticket-impact` missing, or a delegated built-in (`tk super add-note`, `tk super close`) failed; 2 usage error, no tickets directory, or `TK_SCRIPT` unset (the plugin was not started through `tk`).
 
 Requires bash, POSIX awk and the `ticket-impact` plugin on `PATH` (the packages declare the dependency). It contains no graph logic: every fact comes from `tk impact --porcelain`, IDs are resolved by `tk super show`. Bypass: `tk super close <id>` runs the built-in. `tk status <id> closed` is not guarded; `tk lint --conventions` reports such a close as `close-note`.
+
+## ticket-set
+
+`tk set <id> <field> <value> [--no-note]` changes one field of a ticket, so that nobody has to hand-edit front matter (`tk edit` needs a terminal):
+
+```
+$ tk set 5c4 priority 0
+Updated nw-5c46: priority 2 -> 0
+Note: Edited: priority 2 -> 0
+```
+
+| Field | Value |
+|---|---|
+| `title` | text; rewrites the first `# ` heading after the front matter, later headings stay |
+| `priority` | `0`-`4`, 0 = highest |
+| `type` | `bug`, `feature`, `task`, `epic` or `chore` |
+| `assignee` | name, or `none` |
+| `tags` | `a,b` replaces the list (written as `[a, b]`); `+a,-b` adds and removes tags, keeping the rest; `none`. Plain and signed tags cannot be mixed in one call; a tag holds no spaces or brackets |
+| `parent` | ticket ID (partial IDs work), or `none`. The parent must exist and must not be the ticket itself or one of its descendants |
+
+`none` removes the field from the front matter, and so does removing the last tag. A value that starts with a dash goes after `--`: `tk set <id> tags -- -old`.
+
+`status`, `deps` and `links` are refused with a pointer to their own commands (`tk start` / `tk close` / `tk reopen` / `tk status`, `tk dep` / `tk undep`, `tk link` / `tk unlink`); `id` and `created` cannot be changed.
+
+Every change appends the note `Edited: <field> <old> -> <new>` through `tk super add-note` (a missing value shows as `none`); `--no-note` skips it. A value that is already there prints `<id>: <field> unchanged` and writes nothing. Closed tickets can be edited.
+
+Only the front matter is searched, so a body line such as `priority: high` is left alone (the core `update_yaml_field` would rewrite it), and values pass through unescaped: `/`, `&` and `\` survive. Surrounding blanks are trimmed; a multi-line value is refused.
+
+Exit codes: `0` changed or unchanged, `1` invalid value, refused field, ticket or parent not found / ambiguous, or the note could not be written, `2` usage error, unknown field, no `.tickets` directory found, or `TK_SCRIPT` unset.
+
+Requires only bash, POSIX awk and `find`.

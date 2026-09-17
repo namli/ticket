@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+# tk-plugin: Change title, priority, type, assignee, tags or parent without an editor
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+FIELDS="title, priority, type, assignee, tags, parent"
+VALID_TYPES="bug|feature|task|epic|chore"
+
+usage() {
+    echo "Usage: tk set <id> <field> <value> [--no-note]"
+    echo "Fields:"
+    echo "  title     <text>          rewrites the first '# ' heading"
+    echo "  priority  0-4             0 = highest"
+    echo "  type      $VALID_TYPES"
+    echo "  assignee  <name> | none"
+    echo "  tags      a,b | +a,-b | none   replace the list, or add (+) / remove (-) tags"
+    echo "  parent    <id> | none     partial ID; not the ticket itself or its descendant"
+    echo "  'none' removes the field. A value starting with '-' goes after '--': tk set <id> tags -- -old"
+    echo "  --no-note  do not write the 'Edited: <field> <old> -> <new>' note"
+    echo "status, deps and links have their own commands (tk start/close/reopen, tk dep, tk link)"
+}
+
+die_usage() {
+    echo "Error: $1" >&2
+    usage >&2
+    exit 2
+}
+
+die() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+if [[ -z "${TK_SCRIPT:-}" ]]; then
+    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
+    exit 2
+fi
+
+no_note=0
+args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-note) no_note=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; while [[ $# -gt 0 ]]; do args+=("$1"); shift; done ;;
+        -*) die_usage "unknown option: $1" ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+
+[[ ${#args[@]} -eq 3 ]] || die_usage "expected <id> <field> <value>"
+field="${args[1]}"
+value="${args[2]}"
+
+case "$field" in
+    title|priority|type|assignee|tags|parent) ;;
+    status) die "status is not set here: use tk start / tk close / tk reopen / tk status" ;;
+    deps) die "deps is not set here: use tk dep / tk undep" ;;
+    links) die "links is not set here: use tk link / tk unlink" ;;
+    id|created) die "$field cannot be changed" ;;
+    *) die_usage "unknown field '$field' (fields: $FIELDS)" ;;
+esac
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+# Full ID on stdout; same lookup and error texts as ticket_path in core
+resolve_id() {
+    local id="$1" matches count
+    read -r id <<< "$id"
+    if [[ -f "$TICKETS_DIR/$id.md" ]]; then
+        echo "$id"
+        return 0
+    fi
+    matches=$(find "$TICKETS_DIR" -maxdepth 1 -name "*${id}*.md" 2>/dev/null | head -2)
+    count=$(printf '%s\n' "$matches" | grep -c . || true)
+    if [[ "$count" -eq 1 ]]; then
+        basename "$matches" .md
+    elif [[ "$count" -gt 1 ]]; then
+        echo "Error: ambiguous ID '$id' matches multiple tickets" >&2
+        return 1
+    else
+        echo "Error: ticket '$id' not found" >&2
+        return 1
+    fi
+}
+
+# Front matter field of one ticket
+field_of() {
+    awk -v key="$2" '
+    FNR == 1 { if ($0 != "---") exit; next }
+    /^---$/ { exit }
+    index($0, key ":") == 1 {
+        v = substr($0, length(key) + 2)
+        gsub(/^[ \t]+|[ \t]+$/, "", v)
+        print v
+        exit
+    }' "$TICKETS_DIR/$1.md"
+}
+
+# First '# ' heading after the front matter
+title_of() {
+    awk '
+    FNR == 1 && $0 == "---" { fm = 1; next }
+    fm == 1 { if ($0 == "---") fm = 2; next }
+    /^# / { print substr($0, 3); exit }' "$TICKETS_DIR/$1.md"
+}
+
+# What the ticket holds now, in the form the note shows
+current_of() {
+    local v
+    if [[ "$2" == "title" ]]; then v=$(title_of "$1"); else v=$(field_of "$1" "$2"); fi
+    echo "${v:-none}"
+}
+
+# Rewrite one ticket: op = set | unset (front matter field) | title (first heading).
+# Only the front matter is searched, so a body line 'priority: x' stays. The value
+# travels through the environment: awk -v and sed would interpret \, / and &.
+rewrite() {
+    local file="$TICKETS_DIR/$1.md" tmp="$TICKETS_DIR/$1.md.tmp.$$"
+    TK_SET_VALUE="$4" awk -v key="$2" -v op="$3" '
+    BEGIN { val = ENVIRON["TK_SET_VALUE"] }
+    NR == 1 && $0 == "---" { fm = 1; print; next }
+    fm == 1 && $0 == "---" {
+        if (op == "set" && !done) print key ": " val
+        fm = 2; print; next
+    }
+    fm == 1 && !done && index($0, key ":") == 1 {
+        done = 1
+        if (op == "set") print key ": " val
+        next
+    }
+    fm == 2 && op == "title" && !done && /^# / { done = 1; print "# " val; next }
+    { print }' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+# Tags of one ticket, one per line
+tags_of() {
+    field_of "$1" tags | awk '{
+        gsub(/[][]/, "")
+        n = split($0, a, ",")
+        for (i = 1; i <= n; i++) {
+            gsub(/^[ \t]+|[ \t]+$/, "", a[i])
+            if (a[i] != "") print a[i]
+        }
+    }'
+}
+
+# New tag list for <id> from a,b (replace) or +a,-b (edit); one tag per line
+new_tags() {
+    local id="$1" spec="$2" el name plain=0 signed=0 t
+    local -a parts=() result=() kept=()
+    IFS=',' read -ra parts <<< "$spec"
+    for el in ${parts[@]+"${parts[@]}"}; do
+        read -r el <<< "$el"
+        [[ -n "$el" ]] || continue
+        case "$el" in
+            +*|-*) signed=1; name="${el:1}" ;;
+            *) plain=1; name="$el" ;;
+        esac
+        [[ -n "$name" ]] || die "empty tag in '$spec'"
+        [[ "$name" != *[][\ ]* ]] || die "invalid tag '$name' (no spaces or brackets)"
+    done
+    [[ $plain -eq 1 || $signed -eq 1 ]] || die "no tags given (use 'none' to remove them)"
+    [[ $plain -eq 0 || $signed -eq 0 ]] || die "cannot mix plain tags with +tag / -tag in '$spec'"
+
+    if [[ $signed -eq 1 ]]; then
+        while IFS= read -r t; do result+=("$t"); done < <(tags_of "$id")
+    fi
+    for el in "${parts[@]}"; do
+        read -r el <<< "$el"
+        [[ -n "$el" ]] || continue
+        if [[ "$el" == -* ]]; then
+            kept=()
+            for t in ${result[@]+"${result[@]}"}; do [[ "$t" == "${el:1}" ]] || kept+=("$t"); done
+            result=(${kept[@]+"${kept[@]}"})
+            continue
+        fi
+        name="${el#+}"
+        for t in ${result[@]+"${result[@]}"}; do [[ "$t" == "$name" ]] && continue 2; done
+        result+=("$name")
+    done
+    [[ ${#result[@]} -eq 0 ]] || printf '%s\n' "${result[@]}"
+}
+
+# Is <candidate> the ticket itself or below it? Walks the parent chain up from
+# <candidate>; prints the chain "candidate -> ... -> id" and returns 0 when it reaches <id>.
+descends_from() {
+    local id="$1" p="$2" path="$2" seen=" $2 "
+    while :; do
+        p=$(field_of "$p" parent)
+        [[ -n "$p" && -f "$TICKETS_DIR/$p.md" ]] || return 1
+        path+=" -> $p"
+        [[ "$p" != "$id" ]] || { echo "$path"; return 0; }
+        [[ "$seen" != *" $p "* ]] || return 1
+        seen+="$p "
+    done
+}
+
+write_note() {
+    if ! "$TK_SCRIPT" super add-note "$1" "$2" >/dev/null; then
+        echo "Error: the field was changed but the note was not written" >&2
+        exit 1
+    fi
+    echo "Note: $2"
+}
+
+id=$(resolve_id "${args[0]}") || exit 1
+
+[[ "$value" != *$'\n'* ]] || die "$field must be a single line"
+# Surrounding blanks would not survive the front matter round trip
+value="${value#"${value%%[![:space:]]*}"}"
+value="${value%"${value##*[![:space:]]}"}"
+[[ -n "$value" ]] || {
+    [[ "$field" == "title" ]] && die "title must not be empty"
+    die "$field must not be empty"
+}
+
+# new = value to write; op = set | unset | title
+op="set" new="$value"
+case "$field" in
+    title)
+        op="title"
+        [[ -n "$(title_of "$id")" ]] || die "$id has no '# ' title heading to rewrite"
+        ;;
+    priority)
+        [[ "$value" =~ ^[0-4]$ ]] || die "invalid priority '$value' (must be 0-4, 0 = highest)"
+        ;;
+    type)
+        [[ "$value" =~ ^($VALID_TYPES)$ ]] || die "invalid type '$value' (must be $VALID_TYPES)"
+        ;;
+    assignee)
+        [[ "$value" != "none" ]] || op="unset"
+        ;;
+    tags)
+        if [[ "$value" == "none" ]]; then
+            op="unset"
+        else
+            list=$(new_tags "$id" "$value") || exit 1
+            if [[ -z "$list" ]]; then op="unset"; else new="[${list//$'\n'/, }]"; fi
+        fi
+        ;;
+    parent)
+        if [[ "$value" == "none" ]]; then
+            op="unset"
+        else
+            new=$(resolve_id "$value") || exit 1
+            [[ "$new" != "$id" ]] || die "$id cannot be its own parent"
+            if path=$(descends_from "$id" "$new"); then
+                die "$new is a descendant of $id: $path"
+            fi
+        fi
+        ;;
+esac
+[[ "$op" != "unset" ]] || new="none"
+
+old=$(current_of "$id" "$field")
+if [[ "$old" == "$new" ]]; then
+    echo "$id: $field unchanged"
+    exit 0
+fi
+
+rewrite "$id" "$field" "$op" "$new" || die "could not write $TICKETS_DIR/$id.md"
+if [[ "$(current_of "$id" "$field")" != "$new" ]]; then
+    die "$field of $id was not updated (no front matter in $TICKETS_DIR/$id.md?)"
+fi
+
+echo "Updated $id: $field $old -> $new"
+[[ $no_note -eq 1 ]] || write_note "$id" "Edited: $field $old -> $new"
