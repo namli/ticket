@@ -2,7 +2,7 @@
 id: tic-mwhy
 status: open
 deps: [tic-zmz1]
-links: [tic-5cgv]
+links: [tic-5cgv, tic-seki]
 created: 2026-09-17T11:29:13Z
 type: feature
 priority: 1
@@ -28,3 +28,7 @@ Scenarios in features/ticket_dep_guard.feature: self-dep rejected; 2- and 3-node
 **2026-09-17T11:29:13Z**
 
 Blocked by tic-zmz1: plugin names and whether they shadow `tk dep` / `tk undep` are not decided yet
+
+**2026-09-17T13:11:34Z**
+
+Related tic-seki: `tk dep cycle` reports false cycles after the first real one; do not rely on its output in the dep guard until that is fixed (write the reachability walk in the plugin, as the design already says).

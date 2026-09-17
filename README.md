@@ -141,6 +141,8 @@ echo "Created $id, doing extra stuff..."
 
 Use `tk super <cmd>` to bypass plugins and run the built-in directly.
 
+**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. It is not part of `ticket-extras`: copy or symlink `plugins/ticket-lint` into your PATH, or install the `ticket-lint` package.
+
 ## Testing
 
 The tests are written in the Behavior-Driven Development library [behave](https://behave.readthedocs.io/en/latest/) and require Python.

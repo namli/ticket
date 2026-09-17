@@ -2,7 +2,7 @@
 id: tic-vezj
 status: open
 deps: []
-links: []
+links: [tic-xj6g]
 created: 2026-09-17T11:29:13Z
 type: feature
 priority: 2
@@ -22,3 +22,9 @@ Case-insensitive extended regex over title, body and notes of non-closed tickets
 
 Scenarios in features/ticket_find.feature: match in body; match in notes; closed excluded by default and included with --all; multiple patterns; tag filter; no match exits 1. SKILL.md quick reference uses `tk find`. Behave scenarios added and `make test` passes; README.md usage block, plugins/README.md and CHANGELOG.md (### Plugins, version 1.0.0) updated; plugin has tk-plugin and tk-plugin-version metadata; NOT added to pkg/extras.txt (new plugin, not a core extraction).
 
+
+## Notes
+
+**2026-09-17T13:11:34Z**
+
+Related tic-xj6g: do not copy gsub(/[\[\] ]/...) from plugins/ticket-ls into ticket-find; use /[][]/ as plugins/ticket-lint does.

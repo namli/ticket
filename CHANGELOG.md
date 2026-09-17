@@ -19,6 +19,7 @@
 - ticket-ls 1.0.0: List tickets with optional filters (extracted from core); `ticket-list` symlink for alias
 - ticket-query 1.0.0: Output tickets as JSON, optionally filtered with jq (extracted from core)
 - ticket-migrate-beads 1.0.0: Import tickets from .beads/issues.jsonl (extracted from core)
+- ticket-lint 1.0.0: New plugin, `tk lint [--conventions] [--strict]` checks tickets for broken graph invariants (self-deps, cycles, missing references, asymmetric links, invalid fields) in `file:line: level: message [rule]` format
 
 ## [0.3.2] - 2026-02-03
 
