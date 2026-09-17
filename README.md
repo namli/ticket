@@ -141,7 +141,7 @@ echo "Created $id, doing extra stuff..."
 
 Use `tk super <cmd>` to bypass plugins and run the built-in directly.
 
-**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. It is not part of `ticket-extras`: copy or symlink `plugins/ticket-lint` into your PATH, or install the `ticket-lint` package.
+**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. Neither is part of `ticket-extras`: copy or symlink `plugins/ticket-lint` and `plugins/ticket-impact` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint` / `ticket-impact` packages.
 
 ## Testing
 
