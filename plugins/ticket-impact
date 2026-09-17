@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# tk-plugin: Show what closing a ticket would change
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+usage() {
+    echo "Usage: tk impact [--porcelain] <id>"
+    echo "  --porcelain  stable machine-readable output, one fact per line"
+}
+
+porcelain=0
+id=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --porcelain) porcelain=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *)
+            if [[ -n "$id" ]]; then
+                echo "Error: only one ticket ID is accepted" >&2
+                usage >&2
+                exit 2
+            fi
+            id="$1"; shift ;;
+    esac
+done
+
+# Trim whitespace around the ID (agents sometimes pass " id ")
+read -r id <<< "$id" || true
+if [[ -z "$id" ]]; then
+    usage >&2
+    exit 2
+fi
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+# Resolve ticket file (exact or partial match), same rules as ticket-edit
+file="$TICKETS_DIR/${id}.md"
+if [[ ! -f "$file" ]]; then
+    matches=$(find "$TICKETS_DIR" -maxdepth 1 -name "*${id}*.md" 2>/dev/null)
+    count=$(printf '%s\n' "$matches" | grep -c . || true)
+    if [[ "$count" -eq 1 ]]; then
+        file="$matches"
+    elif [[ "$count" -gt 1 ]]; then
+        echo "Error: ambiguous ID '$id' matches multiple tickets" >&2
+        exit 1
+    else
+        echo "Error: ticket '$id' not found" >&2
+        exit 1
+    fi
+fi
+target=$(basename "$file" .md)
+
+LC_ALL=C awk -v target="$target" -v porcelain="$porcelain" '
+# --- Loading: one pass over all ticket files ---
+FNR == 1 {
+    if (seen) store()
+    seen = 1
+    id = ""; st = ""; deps = ""; parent = ""; title = ""
+    # fm: 1 = inside front matter, 2 = body (or the file has no front matter)
+    fm = ($0 == "---") ? 1 : 2
+    next
+}
+fm == 1 && /^---$/ { fm = 2; next }
+fm == 1 && /^id:/ { id = trim(substr($0, 4)) }
+fm == 1 && /^status:/ { st = trim(substr($0, 8)) }
+fm == 1 && /^deps:/ { deps = substr($0, 6); gsub(/[][ \t]/, "", deps) }
+fm == 1 && /^parent:/ { parent = trim(substr($0, 8)) }
+fm == 2 && title == "" && /^# / { title = substr($0, 3) }
+
+function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+
+function store() {
+    if (id == "") return
+    status[id] = st
+    deps_of[id] = deps
+    parent_of[id] = parent
+    title_of[id] = title
+}
+
+END {
+    if (seen) store()
+    if (!(target in status)) {
+        print "Error: no ticket with id " target " (file name and id field differ?)" > "/dev/stderr"
+        exit 1
+    }
+    printf "%s [%s] %s\n", target, status[target], title_of[target]
+    print ""
+    print "No impact: nothing depends on " target
+}
+' "$TICKETS_DIR"/*.md
