@@ -1,6 +1,6 @@
 ---
 id: tic-6rw0
-status: in_progress
+status: closed
 deps: [tic-zmz1]
 links: []
 created: 2026-09-17T11:29:13Z
@@ -40,3 +40,7 @@ Design update from tic-5lpp: the re-blocked dependents are the 'ready' lines of 
 **2026-09-17T16:56:25Z**
 
 Design decisions (spec docs/superpowers/specs/2026-09-17-ticket-start-reopen-guard-design.md): two files, both thin consumers of 'tk impact --porcelain' (status / blocker / ready lines), IDs resolved through 'tk super show'; 'tk start' on a closed ticket is always refused and points to 'tk reopen -m <reason> --in-progress' (--force does not override it); --force on start overrides open blockers and writes a 'Forced start: open blockers ...' note; 'tk reopen --in-progress' applies the same blocker guard, --force overrides it and adds a 'Forced: ...' second line to the Reopened note; plain reopen is never refused; reopen of a non-closed ticket -> exit 0, no note, status untouched.
+
+**2026-09-17T18:10:25Z**
+
+Closed: done - plugins/ticket-start and plugins/ticket-reopen (1.0.0) shadow tk start / tk reopen: start refuses blocked and closed tickets (--force overrides blockers, writes a Forced start note); reopen requires -m, writes the Reopened note, supports --in-progress (guarded, --force) and reports re-blocked dependents; IDs resolved from front matter with a round-trip check, empty IDs rejected; 54 scenarios, make test 264/0, busybox awk green; README, plugins/README, CHANGELOG, publish-script deps on ticket-impact and minimal skill edits done. PR https://github.com/namli/ticket/pull/5
