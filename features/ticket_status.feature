@@ -27,7 +27,7 @@ Feature: Ticket Status Management
     And ticket "test-0001" should have field "status" with value "open"
 
   Scenario: Start command sets status to in_progress
-    When I run "ticket start test-0001"
+    When I run "ticket super start test-0001"
     Then the command should succeed
     And the output should be "Updated test-0001 -> in_progress"
     And ticket "test-0001" should have field "status" with value "in_progress"

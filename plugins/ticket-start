@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# tk-plugin: Guarded start: refuse blocked and closed tickets
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+usage() {
+    echo "Usage: tk start <id> [--force]"
+    echo "  --force  start although the ticket has open blockers"
+    echo "Bypass the guard: tk super start <id>"
+}
+
+die_usage() {
+    echo "Error: $1" >&2
+    usage >&2
+    exit 2
+}
+
+if [[ -z "${TK_SCRIPT:-}" ]]; then
+    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
+    exit 2
+fi
+
+force=0
+ids=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --force) force=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; while [[ $# -gt 0 ]]; do ids+=("$1"); shift; done ;;
+        -*) die_usage "unknown option: $1" ;;
+        *) ids+=("$1"); shift ;;
+    esac
+done
+
+[[ ${#ids[@]} -eq 1 ]] || die_usage "expected exactly one <id>"
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+# Full ID on stdout; core resolves it, so partial IDs and error texts match every other command
+resolve_id() {
+    local out
+    out=$("$TK_SCRIPT" super show "$1") || return 1
+    awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+}
+
+# IDs (second field) of the porcelain lines of one kind, joined with ", "
+facts_of() {
+    awk -v kind="$1" '$1 == kind { printf "%s%s", sep, $2; sep = ", " }' <<< "$facts"
+}
+
+id=$(resolve_id "${ids[0]}") || exit 1
+
+if ! command -v ticket-impact >/dev/null 2>&1 && ! command -v tk-impact >/dev/null 2>&1; then
+    echo "Error: tk start needs the ticket-impact plugin on PATH" >&2
+    echo "Use 'tk super start' to bypass the guard" >&2
+    exit 1
+fi
+
+# One read, before any write: status and blocker lines do not depend on the target's status
+facts=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
+status=$(awk '$1 == "status" { print $2; exit }' <<< "$facts")
+blockers=$(facts_of blocker)
+
+if [[ "$status" == "closed" ]]; then
+    # --force does not apply: starting a closed ticket is a reopen without a reason
+    echo "Error: $id is closed - use 'tk reopen $id -m <reason> --in-progress'" >&2
+    exit 1
+fi
+
+if [[ "$status" == "in_progress" ]]; then
+    echo "$id is already in progress"
+    exit 0
+fi
+
+note=""
+if [[ -n "$blockers" ]]; then
+    if [[ $force -eq 0 ]]; then
+        echo "Error: $id has open blockers: $blockers" >&2
+        echo "Use --force to start anyway, or 'tk super start' to bypass the guard" >&2
+        exit 1
+    fi
+    echo "Warning: starting $id with open blockers: $blockers" >&2
+    note="Forced start: open blockers $blockers"
+    "$TK_SCRIPT" super add-note "$id" "$note" >/dev/null || exit 1
+fi
+
+if ! "$TK_SCRIPT" super start "$id"; then
+    [[ -z "$note" ]] || echo "Error: note written but tk super start failed" >&2
+    exit 1
+fi
+[[ -z "$note" ]] || echo "Note: $note"
