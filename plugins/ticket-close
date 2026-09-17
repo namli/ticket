@@ -18,11 +18,6 @@ die_usage() {
     exit 2
 }
 
-if [[ -z "${TK_SCRIPT:-}" ]]; then
-    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
-    exit 2
-fi
-
 reason="" text="" ref="" have_text=0 have_ref=0 force=0
 ids=()
 while [[ $# -gt 0 ]]; do
@@ -47,7 +42,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${#ids[@]} -eq 1 ]] || die_usage "expected exactly one <id>"
+[[ -n "${ids[0]//[[:space:]]/}" ]] || die_usage "<id> must not be empty"
 [[ -n "$reason" ]] || die_usage "--reason is required"
+[[ $have_text -eq 0 || "$text" != *$'\n'* ]] || die_usage "-m must be a single line"
 case "$reason" in
     done|wontdo)
         [[ $have_ref -eq 0 ]] || die_usage "--ref is only valid with --reason duplicate|superseded"
@@ -61,17 +58,38 @@ case "$reason" in
     *) die_usage "invalid --reason '$reason' (done|wontdo|duplicate|superseded)" ;;
 esac
 
+if [[ -z "${TK_SCRIPT:-}" ]]; then
+    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
+    exit 2
+fi
+
 if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
     echo "Error: no .tickets directory found (searched parent directories)" >&2
     exit 2
 fi
 
 # Full ID on stdout. Core resolves it (exact or partial) and prints its own
-# errors; the output is captured first so pipefail never sees a SIGPIPE.
+# errors. The id is read from the front matter only and must name the file
+# core resolved: a ticket whose file name and id field differ is refused.
 resolve_id() {
-    local out
-    out=$("$TK_SCRIPT" super show "$1") || return 1
-    awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+    local input out id
+    read -r input <<< "$1" || true
+    out=$("$TK_SCRIPT" super show "$input") || return 1
+    id=$(awk '
+        NR == 1 && $0 != "---" { exit }
+        NR > 1 && $0 == "---" { exit }
+        /^id:/ { print $2; exit }
+    ' <<< "$out")
+    if [[ -z "$id" ]]; then
+        echo "Error: ticket '$input' has no id field (run tk lint)" >&2
+        return 1
+    fi
+    if [[ ! -f "$TICKETS_DIR/$id.md" || "$id" != *"$input"* ]] ||
+       [[ -f "$TICKETS_DIR/$input.md" && "$id" != "$input" ]]; then
+        echo "Error: ticket '$input': file name and id field differ (run tk lint)" >&2
+        return 1
+    fi
+    echo "$id"
 }
 
 id=$(resolve_id "${ids[0]}") || exit 1

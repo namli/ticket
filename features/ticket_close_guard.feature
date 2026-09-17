@@ -59,6 +59,14 @@ Feature: Guarded Close
     When I run "ticket close cl-0001 --reason duplicate --ref cl-0002"
     Then the exit code should be 0
 
+  Scenario: An in_progress target closes normally
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And ticket "cl-0001" has status "in_progress"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And ticket "cl-0001" should have field "status" with value "closed"
+    And ticket "cl-0001" should contain "Closed: done - shipped"
+
   # --- Usage errors ---
 
   Scenario: Missing --reason is a usage error
@@ -88,6 +96,7 @@ Feature: Guarded Close
     When I run "ticket close cl-0001 --reason wontdo"
     Then the exit code should be 2
     And the error output should contain "--reason wontdo requires -m <text>"
+    And ticket "cl-0001" should have field "status" with value "open"
 
   Scenario: Empty -m is a usage error
     Given a ticket exists with ID "cl-0001" and title "Target"
@@ -96,11 +105,75 @@ Feature: Guarded Close
     And the error output should contain "-m must not be empty"
     And ticket "cl-0001" should have field "status" with value "open"
 
+  Scenario: Multi-line -m is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason done -m \"$(printf 'one\ntwo')\""
+    Then the exit code should be 2
+    And the error output should contain "-m must be a single line"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: Empty <id> is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close \"\" --reason done -m \"x\""
+    Then the exit code should be 2
+    And the error output should contain "<id> must not be empty"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: Whitespace-only <id> is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close \" \" --reason done -m \"x\""
+    Then the exit code should be 2
+    And the error output should contain "<id> must not be empty"
+    And ticket "cl-0001" should have field "status" with value "open"
+
   Scenario: Duplicate without --ref is a usage error
     Given a ticket exists with ID "cl-0001" and title "Target"
     When I run "ticket close cl-0001 --reason duplicate"
     Then the exit code should be 2
     And the error output should contain "--reason duplicate requires --ref <id>"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: Superseded without --ref is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason superseded"
+    Then the exit code should be 2
+    And the error output should contain "--reason superseded requires --ref <id>"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: Duplicate with --ref and an empty -m is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Other"
+    When I run "ticket close cl-0001 --reason duplicate --ref cl-0002 -m \" \""
+    Then the exit code should be 2
+    And the error output should contain "-m must not be empty"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: --reason as the last argument is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason"
+    Then the exit code should be 2
+    And the error output should contain "--reason requires a value"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: -m as the last argument is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason done -m"
+    Then the exit code should be 2
+    And the error output should contain "-m requires a text"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: --ref as the last argument is a usage error
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason duplicate --ref"
+    Then the exit code should be 2
+    And the error output should contain "--ref requires a ticket ID"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: No tickets directory is a usage error
+    Given the tickets directory does not exist
+    When I run "ticket close cl-0001 --reason done -m \"x\""
+    Then the exit code should be 2
+    And the error output should contain "no .tickets directory found"
 
   Scenario: --ref with done is a usage error
     Given a ticket exists with ID "cl-0001" and title "Target"
@@ -108,12 +181,14 @@ Feature: Guarded Close
     When I run "ticket close cl-0001 --reason done -m \"x\" --ref cl-0002"
     Then the exit code should be 2
     And the error output should contain "--ref is only valid with --reason duplicate|superseded"
+    And ticket "cl-0001" should have field "status" with value "open"
 
   Scenario: Unknown flag is a usage error
     Given a ticket exists with ID "cl-0001" and title "Target"
     When I run "ticket close cl-0001 --reason done -m \"x\" --yes"
     Then the exit code should be 2
     And the error output should contain "unknown option: --yes"
+    And ticket "cl-0001" should have field "status" with value "open"
 
   Scenario: No ID is a usage error
     When I run "ticket close --reason done -m \"x\""
@@ -131,6 +206,12 @@ Feature: Guarded Close
   Scenario: Flags may come before the ID
     Given a ticket exists with ID "cl-0001" and title "Target"
     When I run "ticket close --reason=done -m \"shipped\" cl-0001"
+    Then the exit code should be 0
+    And ticket "cl-0001" should have field "status" with value "closed"
+
+  Scenario: -- ends options
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close --reason done -m \"x\" -- cl-0001"
     Then the exit code should be 0
     And ticket "cl-0001" should have field "status" with value "closed"
 
@@ -181,6 +262,55 @@ Feature: Guarded Close
     When I run "ticket close cl-0001 --reason superseded --ref cl-0001"
     Then the exit code should be 1
     And the error output should contain "Error: cl-0001 cannot be superseded by itself"
+
+  Scenario: Target ticket's id field disagrees with its file name
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Other"
+    And ticket "cl-0001" has raw field "id" set to "cl-0002"
+    When I run "ticket close cl-0001 --reason done -m \"x\""
+    Then the exit code should be 1
+    And the error output should contain "file name and id field differ"
+    And ticket "cl-0001" should have field "status" with value "open"
+    And ticket "cl-0002" should have field "status" with value "open"
+    When I run "ticket show cl-0002"
+    Then the output should not contain "Closed:"
+
+  Scenario: --ref ticket's id field disagrees with its file name
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Ref"
+    And a ticket exists with ID "cl-0003" and title "Other"
+    And ticket "cl-0002" has raw field "id" set to "cl-0003"
+    When I run "ticket close cl-0001 --reason duplicate --ref cl-0002"
+    Then the exit code should be 1
+    And the error output should contain "file name and id field differ"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: A ticket with no id field but a body line naming another ticket is refused
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Other"
+    And ticket "cl-0001" has no field "id"
+    And ticket "cl-0001" has body line "id: cl-0002"
+    When I run "ticket close cl-0001 --reason done -m \"x\""
+    Then the exit code should be 1
+    And the error output should contain "has no id field"
+    And ticket "cl-0002" should have field "status" with value "open"
+
+  Scenario: A body line naming another ticket does not confuse a well-formed ticket's ID
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Other"
+    And ticket "cl-0001" has body line "id: cl-0002"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And ticket "cl-0001" should have field "status" with value "closed"
+    And ticket "cl-0002" should have field "status" with value "open"
+
+  Scenario: An exact ID that is a prefix of another ID closes only itself
+    Given a ticket exists with ID "cl-1" and title "Target"
+    And a ticket exists with ID "cl-12" and title "Other"
+    When I run "ticket close cl-1 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And ticket "cl-1" should have field "status" with value "closed"
+    And ticket "cl-12" should have field "status" with value "open"
 
   # --- Already closed ---
 
@@ -306,6 +436,9 @@ Feature: Guarded Close
     When I run "ticket close cl-0001 --reason done -m \"shipped\""
     Then the exit code should be 0
     And ticket "cl-0001" should have field "status" with value "closed"
+    And the error output should be empty
+    When I run "ticket show cl-0001"
+    Then the output should not contain "Forced:"
 
   Scenario: Closed dependents do not refuse a won't-do close
     Given a ticket exists with ID "cl-0001" and title "Target"
@@ -346,6 +479,19 @@ Feature: Guarded Close
     And I run "ticket show cl-0001"
     Then the output should contain "Closed: done - shipped"
     And the output should not contain "Forced:"
+
+  Scenario: Force overriding all three classes at once
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Blocker one"
+    And a ticket exists with ID "cl-0003" and title "Blocker two"
+    And a ticket exists with ID "cl-0004" and title "Child" with parent "cl-0001"
+    And a ticket exists with ID "cl-0005" and title "Dependent"
+    And ticket "cl-0001" depends on "cl-0002"
+    And ticket "cl-0001" depends on "cl-0003"
+    And ticket "cl-0005" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason wontdo -m \"dropped\" --force"
+    Then the exit code should be 0
+    And ticket "cl-0001" should contain "Forced: open blockers cl-0002, cl-0003; open children cl-0004; open dependents cl-0005"
 
   # --- Report ---
 
