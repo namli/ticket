@@ -36,3 +36,11 @@ Blocked by tic-5lpp: close reports newly ready tickets and refuses on false-read
 **2026-09-17T15:15:00Z**
 
 Guard style decided in tic-zmz1: option A - plugins/ticket-close shadows built-in 'tk close'. Reason: plugin dispatch (ticket:1334) checks PATH before built-ins, so shadowing needs no core change and keeps the fork mergeable with upstream wedow/ticket; an agent typing the built-in name from habit still hits the guard; escape hatches are 'tk super <cmd>' and --force. Caveat: the guard exists only where the plugins are on PATH, so the skill must fail loudly when they are missing (see tic-x75b).
+
+**2026-09-17T15:23:06Z**
+
+Design update from tic-5lpp: 'reuse tk impact --ids-ready' now reads 'tk impact --porcelain' - blocker / child lines for the guard, ready lines for the unblock report, last-child for the parent hint. Spec: docs/superpowers/specs/2026-09-17-ticket-impact-design.md
+
+**2026-09-17T16:34:15Z**
+
+Open design question from the tic-5lpp final review, deferred here by the user (2026-09-17): add a 'target <full-id>' line to 'tk impact --porcelain' so ticket-close / ticket-reopen do not re-resolve a partial ID themselves (a third copy of the find block). Additive, legal within the 1.x porcelain contract (consumers ignore unknown kinds). Decide when designing ticket-close.

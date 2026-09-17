@@ -137,3 +137,55 @@ repos:
         files: ^\.tickets/
         pass_filenames: false
 ```
+
+## ticket-impact
+
+`tk impact [--porcelain] <id>` shows what closing a ticket would change. It is read-only and accepts one full or partial ID.
+
+```
+$ tk impact nw-5c46
+nw-5c46 [in_progress] Add SSE connection management
+
+Open blockers:
+- nw-1d09 [open] Pick the reconnect strategy
+
+Becomes ready:
+- nw-7a21 [open] Stream ticket updates to the UI
+
+Still blocked by others:
+- nw-9f3e [open] Release 0.5 <- nw-2b77
+
+Last open child of nw-0a11 [open] Realtime epic - consider closing the parent
+```
+
+Every fact is computed as if the ticket were already closed: a dependent is "ready" when all its other dependencies are closed, a dangling dependency counts as open, and only direct dependents are examined. On a ticket that is already closed the heading reads `Already closed. Reopening would re-block:`, so the same command answers what a reopen would undo. A ticket with no relations prints `No impact: nothing depends on <id>`.
+
+Exit codes: 0 impact printed, 1 ticket not found or ambiguous ID, 2 usage error or no tickets directory.
+
+### Porcelain
+
+`--porcelain` prints one fact per line for other plugins and scripts:
+
+```
+status <status>
+blocker <id>
+child <id>
+ready <id>
+blocked <id> <dep>[,<dep>...]
+last-child <parent-id>
+```
+
+`status` is always the first line. Kinds appear in this order, lines of one kind are sorted by ID, and a kind without facts prints nothing. Consumers must match on the first word and ignore kinds they do not know; existing kinds and their field order do not change within 1.x.
+
+Any status other than `closed` counts as open. IDs and statuses are assumed to contain no whitespace and no commas, which holds for everything `tk` generates.
+
+```bash
+out=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
+if grep -qE '^blocker |^child ' <<<"$out"; then
+    echo "refusing to close $id: open blockers or children" >&2
+    exit 1
+fi
+awk '$1 == "ready" { print $2 }' <<<"$out"   # tickets that become ready
+```
+
+Requires only bash, POSIX awk, `find` and `grep`.

@@ -146,7 +146,7 @@ echo "Created $id, doing extra stuff..."
 
 Use `tk super <cmd>` to bypass plugins and run the built-in directly.
 
-**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. Neither is part of `ticket-extras`: copy or symlink `plugins/ticket-lint` and `plugins/ticket-find` into your PATH, or install the `ticket-lint` and `ticket-find` packages.
+**Official plugins** live in [`plugins/`](plugins/README.md). Besides the bundled ones, `ticket-lint` (`tk lint`) checks the whole ticket graph for broken invariants - self-dependencies, cycles, dangling references, one-sided links - and works as a pre-commit hook. `ticket-find` (`tk find <pattern>...`) searches ticket titles, bodies and notes - the content `tk query` does not return - and prints matching non-closed tickets as list lines. `ticket-impact` (`tk impact <id>`) shows what closing a ticket would change - which dependents become ready, which stay blocked, open blockers and children - and has a `--porcelain` mode for scripts. None of them is part of `ticket-extras`: copy or symlink `plugins/ticket-lint`, `plugins/ticket-find` and `plugins/ticket-impact` into your PATH (or put the `plugins/` directory on your PATH), or install the `ticket-lint`, `ticket-find` and `ticket-impact` packages.
 
 ## Testing
 
