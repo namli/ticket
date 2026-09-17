@@ -26,6 +26,7 @@
 - ticket-start 1.0.0: New plugin, shadows `tk start`: refuses a ticket with open blockers (`--force` overrides and writes a `Forced start:` note) and always refuses a closed ticket; needs `ticket-impact`; `tk super start` bypasses it
 - ticket-reopen 1.0.0: New plugin, shadows `tk reopen`: `tk reopen <id> -m <reason> [--in-progress] [--force]` writes a `Reopened: <reason>` note, can restore `in_progress`, reports re-blocked dependents and leaves tickets that are not closed alone; needs `ticket-impact`; `tk super reopen` bypasses it
 - ticket-dep 1.0.0: New plugin, shadows `tk dep` / `tk undep` (`ticket-undep` is a symlink to it): rejects self-dependencies and cycles (closed tickets count as edges), compares dependency IDs exactly, requires `--reason <text>` (or `--no-note`) and writes `Blocked by <dep-id>: <text>` / `No longer blocked by <dep-id>: <text>`, prints whether the ticket is ready or blocked, `undep` refuses when the built-in's unanchored removal would damage a sibling dependency; `tk dep tree` / `tk dep cycle` pass through; bypass with `tk super dep`
+- ticket-close 1.0.0: New plugin that shadows the built-in, `tk close <id> --reason done|wontdo|duplicate|superseded [-m text] [--ref id] [--force]`: refuses open blockers, open children and (for won't-do / duplicate / superseded) open dependents, writes the `Closed: <resolution>` note, prints the tickets that became ready and the last-open-child hint; requires ticket-impact; `tk super close` bypasses it
 
 ## [0.3.2] - 2026-02-03
 

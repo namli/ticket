@@ -270,3 +270,51 @@ Exit codes: 0 reopened or nothing to reopen, 1 refused / ticket not found or amb
 The facts come from one `tk impact --porcelain` call taken while the ticket is still closed; the note and the status go through `tk super add-note` and `tk super status`. `tk super reopen <id>` runs the unguarded built-in.
 
 Requires bash, POSIX awk and the `ticket-impact` plugin.
+
+## ticket-close
+
+`ticket-close` shadows the built-in `tk close`. The built-in closes anything and records nothing; because ANY closed dependency counts as resolved, a wrong close silently moves dependents to `tk ready`. The guard refuses unsafe closes, records the resolution and reports the effect.
+
+```
+tk close <id> --reason done|wontdo|duplicate|superseded [-m <text>] [--ref <id>] [--force]
+```
+
+| Flag | Effect |
+|---|---|
+| `--reason <r>`, `--reason=<r>` | Resolution, required. |
+| `-m <text>` | Free text for the note. Required for `done` and `wontdo`, optional for `duplicate` and `superseded`. Must be a single line. |
+| `--ref <id>`, `--ref=<id>` | The ticket this one duplicates / is superseded by (full or partial ID). Required for `duplicate` and `superseded`, rejected otherwise. |
+| `--force` | Close although a guard refuses. Prints what was overridden as warnings and records it in the note. |
+| `-h`, `--help` | Print usage, exit 0. |
+| `--` | End of options. |
+
+```
+$ tk close nw-5c46 --reason done -m "SSE reconnect shipped"
+Updated nw-5c46 -> closed
+Note: Closed: done - SSE reconnect shipped
+Now ready: nw-7a21
+Last open child of nw-0a11 closed - consider closing nw-0a11
+```
+
+Guards (all violations are reported at once, nothing is written, exit 1):
+
+- open blockers - the work cannot be finished yet;
+- open children - close or detach them first;
+- for `wontdo`, `duplicate` and `superseded`: open tickets that depend on this one. They would see the dependency as resolved although nothing was delivered; settle them first with `tk undep` / `tk dep`.
+
+Note written through `tk super add-note`:
+
+| Reason | First line |
+|---|---|
+| `done` | `Closed: done - <text>` |
+| `wontdo` | `Closed: won't do - <text>` |
+| `duplicate` | `Closed: duplicate of <ref>` (`- <text>` appended when `-m` is given) |
+| `superseded` | `Closed: superseded by <ref>` (`- <text>` appended when `-m` is given) |
+
+A forced close that overrode a guard adds a second line, for example `Forced: open blockers nw-1d09; open children nw-3c10`.
+
+After the close the plugin prints `Now ready: <ids>` (or `Nothing became ready`) and, when the parent lost its last open child, a hint to close the parent. A ticket that is already closed prints `<id> is already closed` and exits 0 without a second note.
+
+Exit codes: 0 closed or already closed; 1 guard refused, ticket or `--ref` not found / ambiguous, `--ref` is the ticket itself, file name and id field of a ticket differ, `ticket-impact` missing, or a delegated built-in (`tk super add-note`, `tk super close`) failed; 2 usage error, no tickets directory, or `TK_SCRIPT` unset (the plugin was not started through `tk`).
+
+Requires bash, POSIX awk and the `ticket-impact` plugin on `PATH` (the packages declare the dependency). It contains no graph logic: every fact comes from `tk impact --porcelain`, IDs are resolved by `tk super show`. Bypass: `tk super close <id>` runs the built-in. `tk status <id> closed` is not guarded; `tk lint --conventions` reports such a close as `close-note`.

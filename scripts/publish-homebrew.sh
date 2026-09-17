@@ -50,7 +50,7 @@ generate_plugin_formula() {
     # Plugins that call other plugins
     local extra_deps=""
     case "$plugin_name" in
-        start|reopen) extra_deps=$'\n  depends_on "ticket-impact"' ;;
+        start|reopen|close) extra_deps=$'\n  depends_on "ticket-impact"' ;;
     esac
 
     cat > "$formula_dir/ticket-$plugin_name.rb" << EOF

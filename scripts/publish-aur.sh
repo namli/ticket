@@ -121,7 +121,7 @@ generate_plugin_pkgbuild() {
     local extra_deps=""
     case "$plugin_name" in
         query|migrate-beads) extra_deps="'jq'" ;;
-        start|reopen) extra_deps="'ticket-impact'" ;;
+        start|reopen|close) extra_deps="'ticket-impact'" ;;
     esac
 
     mkdir -p "$output_dir"
