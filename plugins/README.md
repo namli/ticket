@@ -207,7 +207,7 @@ Error: nw-5c46 has open blockers: nw-1d09
 Use --force to start anyway, or 'tk super start' to bypass the guard
 ```
 
-Exit codes: 0 started or already in progress, 1 refused / ticket not found or ambiguous ID / `ticket-impact` missing, 2 usage error or no tickets directory.
+Exit codes: 0 started or already in progress, 1 refused / ticket not found or ambiguous ID or an `id:` field that does not match the file name / `ticket-impact` missing, 2 usage error (including an empty ID) or no tickets directory.
 
 The guard reads its facts from `tk impact --porcelain` and changes the ticket only through `tk super start` and `tk super add-note`. `tk super start <id>` runs the unguarded built-in.
 
@@ -232,7 +232,7 @@ Re-blocked: nw-7a21
 
 `Re-blocked:` lists the dependents whose only open blocker is now the reopened ticket, i.e. the ones that leave `tk ready`; dependents that were already blocked by something else are not listed. With none it prints `Nothing was re-blocked`. A ticket that is not closed is left alone: `<id> is not closed (status: <status>) - nothing to reopen`, exit 0, no note - so an `in_progress` ticket is never demoted to `open`. A plain reopen (without `--in-progress`) is never refused.
 
-Exit codes: 0 reopened or nothing to reopen, 1 refused / ticket not found or ambiguous ID / `ticket-impact` missing, 2 usage error (including a missing or empty `-m`) or no tickets directory.
+Exit codes: 0 reopened or nothing to reopen, 1 refused / ticket not found or ambiguous ID or an `id:` field that does not match the file name / `ticket-impact` missing, 2 usage error (including a missing or empty `-m`) (including an empty ID) or no tickets directory.
 
 The facts come from one `tk impact --porcelain` call taken while the ticket is still closed; the note and the status go through `tk super add-note` and `tk super status`. `tk super reopen <id>` runs the unguarded built-in.
 

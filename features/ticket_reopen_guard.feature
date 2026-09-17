@@ -27,6 +27,14 @@ Feature: Guarded reopen
     And the error output should contain "Error: -m must not be empty"
     And ticket "rg-0001" should have field "status" with value "closed"
 
+  Scenario: Whitespace-only reason is a usage error
+    Given a ticket exists with ID "rg-0001" and title "Done work"
+    And ticket "rg-0001" has status "closed"
+    When I run "ticket reopen rg-0001 -m '   '"
+    Then the exit code should be 2
+    And the error output should contain "Error: -m must not be empty"
+    And ticket "rg-0001" should have field "status" with value "closed"
+
   Scenario: -m without a value is a usage error
     Given a ticket exists with ID "rg-0001" and title "Done work"
     And ticket "rg-0001" has status "closed"
@@ -140,6 +148,18 @@ Feature: Guarded reopen
     When I run "ticket show rg-0001"
     Then the output should not contain "Forced:"
 
+  Scenario: --force without --in-progress changes nothing
+    Given a ticket exists with ID "rg-0001" and title "Done work"
+    And a ticket exists with ID "rg-0002" and title "Blocker"
+    And ticket "rg-0001" depends on "rg-0002"
+    And ticket "rg-0001" has status "closed"
+    When I run "ticket reopen rg-0001 -m 'rework' --force"
+    Then the exit code should be 0
+    And the error output should be empty
+    And ticket "rg-0001" should have field "status" with value "open"
+    When I run "ticket show rg-0001"
+    Then the output should not contain "Forced:"
+
   # --- Not closed ---
 
   Scenario: Open ticket has nothing to reopen
@@ -203,6 +223,14 @@ Feature: Guarded reopen
     Then the exit code should be 2
     And the error output should contain "no .tickets directory found"
 
+  Scenario: Empty ID is a usage error
+    Given a ticket exists with ID "rg-0001" and title "Done work"
+    And ticket "rg-0001" has status "closed"
+    When I run "ticket reopen '' -m 'x'"
+    Then the exit code should be 2
+    And the error output should contain "Error: <id> must not be empty"
+    And ticket "rg-0001" should have field "status" with value "closed"
+
   # --- IDs ---
 
   Scenario: Partial ID is resolved and the full ID is reported
@@ -227,6 +255,19 @@ Feature: Guarded reopen
     Then the exit code should be 1
     And the error output should contain "Error: ambiguous ID 'rg-' matches multiple tickets"
     And ticket "rg-0001" should have field "status" with value "closed"
+
+  Scenario: ID that does not match the file name is refused
+    Given a ticket exists with ID "rg-0001" and title "First"
+    And a ticket exists with ID "rg-0002" and title "Second"
+    And ticket "rg-0001" has status "closed"
+    And ticket "rg-0002" has status "closed"
+    And ticket "rg-0001" has raw field "id" set to "rg-0002"
+    When I run "ticket reopen rg-0001 -m 'x'"
+    Then the exit code should be 1
+    And the error output should contain "Error: cannot resolve 'rg-0001'"
+    And ticket "rg-0002" should have field "status" with value "closed"
+    When I run "ticket show rg-0002"
+    Then the output should not contain "Reopened:"
 
   # --- Bypass and help ---
 

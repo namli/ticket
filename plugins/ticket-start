@@ -33,17 +33,27 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${#ids[@]} -eq 1 ]] || die_usage "expected exactly one <id>"
+[[ -n "${ids[0]//[[:space:]]/}" ]] || die_usage "<id> must not be empty"
 
 if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
     echo "Error: no .tickets directory found (searched parent directories)" >&2
     exit 2
 fi
 
-# Full ID on stdout; core resolves it, so partial IDs and error texts match every other command
+# Full ID on stdout; core resolves it, so partial IDs and error texts match every other command.
+# The id: line is taken from the front matter only, and must resolve back to the same ticket:
+# core works by file name, so a file whose id: differs from its name would send the write elsewhere.
 resolve_id() {
-    local out
+    local out id
     out=$("$TK_SCRIPT" super show "$1") || return 1
-    awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+    id=$(awk 'NR == 1 { fm = ($0 == "---"); next }
+              fm && $0 == "---" { fm = 0 }
+              fm && /^id:/ && !done { print $2; done = 1 }' <<< "$out")
+    if [[ -z "$id" ]] || [[ "$("$TK_SCRIPT" super show "$id" 2>/dev/null)" != "$out" ]]; then
+        echo "Error: cannot resolve '$1': its id: field is missing or does not match the file name (run 'tk lint')" >&2
+        return 1
+    fi
+    echo "$id"
 }
 
 # IDs (second field) of the porcelain lines of one kind, joined with ", "

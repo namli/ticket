@@ -123,6 +123,9 @@ Feature: Guarded start
     Then the exit code should be 0
     And the output should be "sg-0001 is already in progress"
     And the error output should be empty
+    And ticket "sg-0001" should have field "status" with value "in_progress"
+    When I run "ticket show sg-0001"
+    Then the output should not contain "Forced start"
 
   # --- Usage ---
 
@@ -166,6 +169,13 @@ Feature: Guarded start
     Then the exit code should be 2
     And the error output should contain "no .tickets directory found"
 
+  Scenario: Empty ID is a usage error
+    Given a ticket exists with ID "sg-0001" and title "First"
+    When I run "ticket start ''"
+    Then the exit code should be 2
+    And the error output should contain "Error: <id> must not be empty"
+    And ticket "sg-0001" should have field "status" with value "open"
+
   # --- IDs ---
 
   Scenario: Partial ID is resolved to the full ID
@@ -187,6 +197,26 @@ Feature: Guarded start
     Then the exit code should be 1
     And the error output should contain "Error: ambiguous ID 'sg-' matches multiple tickets"
     And ticket "sg-0001" should have field "status" with value "open"
+
+  Scenario: ID that does not match the file name is refused
+    Given a ticket exists with ID "sg-0001" and title "First"
+    And a ticket exists with ID "sg-0002" and title "Second"
+    And ticket "sg-0001" has raw field "id" set to "sg-0002"
+    When I run "ticket start sg-0001"
+    Then the exit code should be 1
+    And the error output should contain "Error: cannot resolve 'sg-0001'"
+    And the output should be empty
+    And ticket "sg-0002" should have field "status" with value "open"
+
+  Scenario: ID line in the body is not taken for the ticket ID
+    Given a ticket exists with ID "sg-0001" and title "First"
+    And a ticket exists with ID "sg-0002" and title "Second"
+    And ticket "sg-0001" has no field "id"
+    And ticket "sg-0001" has body line "id: sg-0002"
+    When I run "ticket start sg-0001"
+    Then the exit code should be 1
+    And the error output should contain "Error: cannot resolve 'sg-0001'"
+    And ticket "sg-0002" should have field "status" with value "open"
 
   # --- Bypass and help ---
 

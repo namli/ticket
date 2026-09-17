@@ -55,8 +55,8 @@ Exit codes (same scheme as `ticket-impact`, `ticket-dep`, `ticket-close`):
 | Code | Meaning |
 |---|---|
 | 0 | Status changed, or there was nothing to change (`start` on an `in_progress` ticket, `reopen` on a ticket that is not closed). |
-| 1 | A guard refused; `<id>` not found or ambiguous; `ticket-impact` is not on `PATH`; a delegated built-in failed. |
-| 2 | Usage error: unknown flag, missing or extra `<id>`, `reopen` without `-m` or with an empty one, `-m` without a value; no tickets directory (`TICKETS_DIR` unset or not a directory); or the plugin was run directly instead of through `tk` (`TK_SCRIPT` unset, as in `ticket-dep`). Message and usage on stderr. |
+| 1 | A guard refused; `<id>` not found or ambiguous; an `<id>` whose `id:` field is missing or does not match its file name; `ticket-impact` is not on `PATH`; a delegated built-in failed. |
+| 2 | Usage error: unknown flag, missing or extra `<id>`, empty `<id>`, `reopen` without `-m` or with an empty one, `-m` without a value; no tickets directory (`TICKETS_DIR` unset or not a directory); or the plugin was run directly instead of through `tk` (`TK_SCRIPT` unset, as in `ticket-dep`). Message and usage on stderr. |
 
 ## Behaviour
 
@@ -69,13 +69,20 @@ Both plugins begin the same way:
 
    ```bash
    resolve_id() {
-       local out
+       local out id
        out=$("$TK_SCRIPT" super show "$1") || return 1
-       awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+       id=$(awk 'NR == 1 { fm = ($0 == "---"); next }
+                 fm && $0 == "---" { fm = 0 }
+                 fm && /^id:/ && !done { print $2; done = 1 }' <<< "$out")
+       if [[ -z "$id" ]] || [[ "$("$TK_SCRIPT" super show "$id" 2>/dev/null)" != "$out" ]]; then
+           echo "Error: cannot resolve '$1': its id: field is missing or does not match the file name (run 'tk lint')" >&2
+           return 1
+       fi
+       echo "$id"
    }
    ```
 
-   Exact and partial IDs behave exactly as everywhere else, and core's error texts (`Error: ticket '<id>' not found`, `Error: ambiguous ID '<id>' matches multiple tickets`) reach stderr unchanged, exit 1. The output is captured before it is parsed and awk reads to the end of its input, so `set -o pipefail` never sees a SIGPIPE. All later steps and all output use the full ID.
+   Exact and partial IDs behave exactly as everywhere else, and core's error texts (`Error: ticket '<id>' not found`, `Error: ambiguous ID '<id>' matches multiple tickets`) reach stderr unchanged, exit 1. The output is captured before it is parsed and awk reads to the end of its input, so `set -o pipefail` never sees a SIGPIPE. The `id:` line is read from the front matter only (the awk tracks entry and exit of the `---` block), never from the ticket body. The resolved ID must resolve back to the same `show` output: core works by file name, so a file whose `id:` field differs from its name would send the write to another ticket. When the `id:` field is missing or the round trip does not match, `resolve_id` prints `Error: cannot resolve '<id>': its id: field is missing or does not match the file name (run 'tk lint')` on stderr and returns 1, so the caller exits 1 without reading or writing anything. All later steps and all output use the full ID.
 3. `ticket-impact` must be reachable: `command -v ticket-impact || command -v tk-impact`. Otherwise
 
    ```
@@ -200,22 +207,22 @@ New `features/ticket_start_guard.feature` and `features/ticket_reopen_guard.feat
 | Guard | open blocker -> exit 1, status still `open`, message lists the blocker and names `--force` and `tk super start`; two blockers listed in ID order; `in_progress` blocker refuses too; dangling dep refuses; closed blocker does not refuse; no deps -> starts |
 | Force | `--force` starts despite a blocker, prints `Warning:` on stderr, writes the `Forced start: open blockers ...` note; `--force` without blockers writes no note |
 | Closed | closed ticket -> exit 1, status still `closed`, message names `tk reopen ... --in-progress`; the same with `--force` |
-| Already started | `in_progress` ticket -> `is already in progress`, exit 0, even with an open blocker |
-| Usage | no ID, two IDs, unknown flag -> exit 2, status unchanged; `--force` before the ID; `--help` exits 0 |
-| IDs | partial ID; unknown ID -> core's error text, exit 1; ambiguous ID -> exit 1 |
+| Already started | `in_progress` ticket -> `is already in progress`, exit 0, even with an open blocker; writes no note |
+| Usage | no ID, two IDs, unknown flag, empty ID -> exit 2, status unchanged; `--force` before the ID; `--help` exits 0 |
+| IDs | partial ID; unknown ID -> core's error text, exit 1; ambiguous ID -> exit 1; an `id:` field that does not match the file name, whether in the front matter or the body -> `cannot resolve`, exit 1, nothing touched |
 | Bypass | `tk super start <id>` starts a blocked ticket |
 
 `ticket_reopen_guard.feature`:
 
 | Area | Scenarios |
 |---|---|
-| Reason | without `-m` -> exit 2, status still `closed`, no note; empty `-m` -> exit 2; `-m` as the last argument without a value -> exit 2 |
+| Reason | without `-m` -> exit 2, status still `closed`, no note; empty `-m` -> exit 2; whitespace-only `-m` -> exit 2; `-m` as the last argument without a value -> exit 2 |
 | Note and status | `-m` writes exactly `Reopened: <reason>` and sets `open`; `--in-progress` sets `in_progress`; stdout order `Updated`, `Note:`, report |
 | Report | a dependent whose only open blocker is the target is listed under `Re-blocked:`; a dependent also blocked by another open ticket is not listed; a closed dependent is not listed; `Nothing was re-blocked` |
-| In-progress guard | `--in-progress` with an open blocker -> exit 1, status still `closed`, no note, message names `--force`; `--force` overrides, prints `Warning:`, note has the `Forced: open blockers ...` line; plain reopen with an open blocker succeeds with no `Forced:` line; `--force` without violation writes no `Forced:` line |
+| In-progress guard | `--in-progress` with an open blocker -> exit 1, status still `closed`, no note, message names `--force`; `--force` overrides, prints `Warning:`, note has the `Forced: open blockers ...` line; plain reopen with an open blocker succeeds with no `Forced:` line; `--force` without violation writes no `Forced:` line; `--force` without `--in-progress` changes nothing beyond a plain reopen |
 | Not closed | `open` ticket -> `is not closed (status: open)`, exit 0, no note; `in_progress` ticket stays `in_progress`, no note |
-| Usage | no ID, two IDs, unknown flag -> exit 2; flags before the ID; `--help` exits 0 |
-| IDs | partial ID (note and report use the full ID); unknown ID -> core's error text, exit 1; ambiguous ID -> exit 1 |
+| Usage | no ID, two IDs, unknown flag, empty ID -> exit 2; flags before the ID; `--help` exits 0 |
+| IDs | partial ID (note and report use the full ID); unknown ID -> core's error text, exit 1; ambiguous ID -> exit 1; an `id:` field that does not match the file name -> `cannot resolve`, exit 1, nothing touched |
 | Bypass | `tk super reopen <id>` reopens with no note |
 
 The "`ticket-impact` missing" branch cannot be expressed with the existing steps (the suite puts `plugins/` on `PATH`); it is checked by hand for both plugins with a `PATH` that holds only a copy of the plugin, and the command and its output are recorded in the plan.
