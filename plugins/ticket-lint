@@ -162,12 +162,46 @@ function check_state(    f, id, i, d) {
     }
 }
 
+function check_links(    f, id, i, l) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        if (is_closed(id)) continue
+        for (i = 1; i <= nlinks[id]; i++) {
+            l = lnk[id, i]
+            if (l == id) continue
+            if (!(l in exists))
+                emit(id, line[id, "links"], "error", "missing-link", "links to missing ticket " l)
+            else if (!((l, id) in haslink))
+                emit(id, line[id, "links"], "error", "asymmetric-link", "links to " l ", but " l " does not link back")
+        }
+    }
+}
+
+function check_parents(    f, id, p, steps) {
+    for (f = 1; f <= nfiles; f++) {
+        id = files[f]
+        if (is_closed(id) || !((id, "parent") in field) || field[id, "parent"] == "") continue
+        p = field[id, "parent"]
+        if (p != id && !(p in exists)) {
+            emit(id, line[id, "parent"], "error", "missing-parent", "parent " p " does not exist")
+            continue
+        }
+        if (p != id && is_closed(p))
+            emit(id, line[id, "parent"], "warning", "open-child-of-closed", "parent " p " is closed but this ticket is " field[id, "status"])
+        for (steps = 0; steps <= nfiles && p != id && (p in exists); steps++) p = field[p, "parent"]
+        if (p == id)
+            emit(id, line[id, "parent"], "error", "parent-cycle", "parent chain leads back to this ticket")
+    }
+}
+
 END {
     check_ids()
     check_fields()
     check_deps()
     check_cycles()
     check_state()
+    check_links()
+    check_parents()
     if (errors + warnings > 0)
         print plural(errors + 0, "error") ", " plural(warnings + 0, "warning") | "cat 1>&2"
     exit (errors > 0 || (strict && warnings > 0)) ? 1 : 0

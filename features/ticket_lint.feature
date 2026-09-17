@@ -170,3 +170,54 @@ Feature: Ticket Lint
     When I run "ticket lint"
     Then the exit code should be 0
     And the output should be empty
+
+  # --- Link and parent rules ---
+
+  Scenario: Link to a missing ticket
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And ticket "lint-0001" has a one-way link to "gone-0000"
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output should be ".tickets/lint-0001.md:5: error: links to missing ticket gone-0000 [missing-link]"
+
+  Scenario: Asymmetric link
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And a ticket exists with ID "lint-0002" and title "Second"
+    And ticket "lint-0001" has a one-way link to "lint-0002"
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output should be ".tickets/lint-0001.md:5: error: links to lint-0002, but lint-0002 does not link back [asymmetric-link]"
+
+  Scenario: Missing parent
+    Given a ticket exists with ID "lint-0001" and title "First" with parent "gone-0000"
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output should be ".tickets/lint-0001.md:9: error: parent gone-0000 does not exist [missing-parent]"
+
+  Scenario: Parent cycle
+    Given a ticket exists with ID "lint-0001" and title "First" with parent "lint-0002"
+    And a ticket exists with ID "lint-0002" and title "Second" with parent "lint-0001"
+    When I run "ticket lint"
+    Then the exit code should be 1
+    And the output line count should be 2
+    And the output line 1 should contain ".tickets/lint-0001.md:9: error: parent chain leads back to this ticket [parent-cycle]"
+    And the output line 2 should contain ".tickets/lint-0002.md:9: error: parent chain leads back to this ticket [parent-cycle]"
+
+  Scenario: Open child of a closed parent
+    Given a ticket exists with ID "lint-0001" and title "Parent"
+    And a ticket exists with ID "lint-0002" and title "Child" with parent "lint-0001"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint"
+    Then the exit code should be 0
+    And the output should be ".tickets/lint-0002.md:9: warning: parent lint-0001 is closed but this ticket is open [open-child-of-closed]"
+
+  Scenario: Closed tickets are history and get no findings
+    Given a ticket exists with ID "lint-0001" and title "First"
+    And ticket "lint-0001" depends on "gone-0000"
+    And ticket "lint-0001" depends on "lint-0001"
+    And ticket "lint-0001" has a one-way link to "gone-0000"
+    And ticket "lint-0001" has raw field "priority" set to "high"
+    And ticket "lint-0001" has status "closed"
+    When I run "ticket lint"
+    Then the exit code should be 0
+    And the output should be empty
