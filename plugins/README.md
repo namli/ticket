@@ -201,9 +201,11 @@ tk close <id> --reason done|wontdo|duplicate|superseded [-m <text>] [--ref <id>]
 | Flag | Effect |
 |---|---|
 | `--reason <r>`, `--reason=<r>` | Resolution, required. |
-| `-m <text>` | Free text for the note. Required for `done` and `wontdo`, optional for `duplicate` and `superseded`. |
+| `-m <text>` | Free text for the note. Required for `done` and `wontdo`, optional for `duplicate` and `superseded`. Must be a single line. |
 | `--ref <id>`, `--ref=<id>` | The ticket this one duplicates / is superseded by (full or partial ID). Required for `duplicate` and `superseded`, rejected otherwise. |
 | `--force` | Close although a guard refuses. Prints what was overridden as warnings and records it in the note. |
+| `-h`, `--help` | Print usage, exit 0. |
+| `--` | End of options. |
 
 ```
 $ tk close nw-5c46 --reason done -m "SSE reconnect shipped"
@@ -232,6 +234,6 @@ A forced close that overrode a guard adds a second line, for example `Forced: op
 
 After the close the plugin prints `Now ready: <ids>` (or `Nothing became ready`) and, when the parent lost its last open child, a hint to close the parent. A ticket that is already closed prints `<id> is already closed` and exits 0 without a second note.
 
-Exit codes: 0 closed or already closed; 1 guard refused, ticket or `--ref` not found / ambiguous, `--ref` is the ticket itself, `ticket-impact` missing, or a delegated built-in (`tk super add-note`, `tk super close`) failed; 2 usage error or no tickets directory.
+Exit codes: 0 closed or already closed; 1 guard refused, ticket or `--ref` not found / ambiguous, `--ref` is the ticket itself, file name and id field of a ticket differ, `ticket-impact` missing, or a delegated built-in (`tk super add-note`, `tk super close`) failed; 2 usage error, no tickets directory, or `TK_SCRIPT` unset (the plugin was not started through `tk`).
 
 Requires bash, POSIX awk and the `ticket-impact` plugin on `PATH` (the packages declare the dependency). It contains no graph logic: every fact comes from `tk impact --porcelain`, IDs are resolved by `tk super show`. Bypass: `tk super close <id>` runs the built-in. `tk status <id> closed` is not guarded; `tk lint --conventions` reports such a close as `close-note`.

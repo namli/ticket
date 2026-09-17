@@ -60,7 +60,7 @@ The close rides in the commit that completes the work - never earlier, never on 
 1. CHECK `tk show <id>`: no open **Blockers** (false dep -> `tk undep` + note; otherwise the work is not done); all **Children** closed; every acceptance criterion met, with evidence. Unmet -> do not close; splitting off the remainder is the user's call.
 2. Create follow-up tickets now, so they land in the same commit.
 3. STOP AND ASK. Show the evidence, the resolution, and which **Blocking** tickets really become ready (no other open blocker). Close only after an explicit yes. "It's done, commit it" authorises the commit, NOT the close - hurry does not change this.
-4. `tk close <id> --reason done -m "<one line: what was delivered>"` - writes the `Closed: done - ...` note and prints what became ready. A refusal means step 1 was skipped; do not answer it with `--force`. No `ticket-close` plugin: `tk add-note <id> "Closed: done - <...>"`, then `tk close <id>`.
+4. `tk close <id> --reason done -m "<one line: what was delivered>"` - writes the `Closed: done - ...` note and prints what became ready. A refusal means step 1 was skipped; do not answer it with `--force`. No `ticket-close` plugin: `tk add-note <id> "Closed: done - <...>"`, then `tk super close <id>`.
 5. `tk ready` -> report what became unblocked (on this branch only, until merged); last child closed -> propose closing the parent.
 6. `git add .tickets/` LAST, commit with the work. Commit fails -> fix and retry. Commit abandoned -> `tk status <id> in_progress` + note `Reopened: commit abandoned`.
 

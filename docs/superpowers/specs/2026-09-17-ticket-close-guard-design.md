@@ -35,7 +35,7 @@ tk close <id> --reason done|wontdo|duplicate|superseded [-m <text>] [--ref <id>]
 | Flag | Effect |
 |---|---|
 | `--reason <r>`, `--reason=<r>` | Resolution. Required. One of `done`, `wontdo`, `duplicate`, `superseded`. |
-| `-m <text>` | Free text for the note. Required and non-empty for `done` and `wontdo`; optional for `duplicate` and `superseded`. |
+| `-m <text>` | Free text for the note. Required and non-empty for `done` and `wontdo`; optional for `duplicate` and `superseded`. Must be a single line: a newline is a usage error. |
 | `--ref <id>`, `--ref=<id>` | The ticket this one duplicates / is superseded by. Required for `duplicate` and `superseded`, rejected for `done` and `wontdo`. Partial IDs are accepted. |
 | `--force` | Close although a guard would refuse. Overrides every guard at once; what was overridden is printed as warnings and recorded in the note. |
 | `-h`, `--help` | Print usage on stdout, exit 0. |
@@ -48,8 +48,8 @@ Exit codes (same scheme as `ticket-impact` and `ticket-dep`):
 | Code | Meaning |
 |---|---|
 | 0 | Ticket closed, or it was already closed (nothing changed). |
-| 1 | A guard refused; `<id>` or `--ref` not found or ambiguous; `--ref` resolves to the target itself; `ticket-impact` is not on `PATH`; a delegated built-in failed. |
-| 2 | Usage error: unknown flag, missing or extra `<id>`, missing or invalid `--reason`, `done` / `wontdo` without `-m` or with an empty one, `duplicate` / `superseded` without `--ref`, `--ref` with `done` / `wontdo`; or no tickets directory (`TICKETS_DIR` unset or not a directory); or `TK_SCRIPT` unset (the plugin was not started through `tk`). Message and usage on stderr. |
+| 1 | A guard refused; `<id>` or `--ref` not found or ambiguous; `--ref` resolves to the target itself; a ticket whose file name and `id` field differ, or without an `id` field; `ticket-impact` is not on `PATH`; a delegated built-in failed. |
+| 2 | Usage error: unknown flag, missing or extra `<id>`, empty `<id>`, missing or invalid `--reason`, `done` / `wontdo` without `-m` or with an empty one, a newline in `-m`, `duplicate` / `superseded` without `--ref`, `--ref` with `done` / `wontdo`; or no tickets directory (`TICKETS_DIR` unset or not a directory); or `TK_SCRIPT` unset (the plugin was not started through `tk`). Message and usage on stderr. |
 
 ## Behaviour
 
@@ -59,13 +59,42 @@ Exit codes (same scheme as `ticket-impact` and `ticket-dep`):
 
 ```bash
 resolve_id() {
-    local out
-    out=$("$TK_SCRIPT" super show "$1") || return 1
-    awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+    local input out id
+    read -r input <<< "$1" || true
+    out=$("$TK_SCRIPT" super show "$input") || return 1
+    id=$(awk '
+        NR == 1 && $0 != "---" { exit }
+        NR > 1 && $0 == "---" { exit }
+        /^id:/ { print $2; exit }
+    ' <<< "$out")
+    if [[ -z "$id" ]]; then
+        echo "Error: ticket '$input' has no id field (run tk lint)" >&2
+        return 1
+    fi
+    if [[ ! -f "$TICKETS_DIR/$id.md" || "$id" != *"$input"* ]] ||
+       [[ -f "$TICKETS_DIR/$input.md" && "$id" != "$input" ]]; then
+        echo "Error: ticket '$input': file name and id field differ (run tk lint)" >&2
+        return 1
+    fi
+    echo "$id"
 }
 ```
 
-`tk super show` resolves through core's `ticket_path`, so exact and partial IDs behave exactly as everywhere else, and core's error texts (`Error: ticket '<id>' not found`, `Error: ambiguous ID '<id>' matches multiple tickets`) reach stderr unchanged, exit 1. The output is captured before it is parsed, and the awk program reads to the end of its input, so `set -o pipefail` never sees a SIGPIPE. The first `id:` line is the front matter one. All later steps and all output use full IDs.
+`tk super show` resolves through core's `ticket_path`, so exact and partial IDs behave exactly as everywhere else, and core's error texts (`Error: ticket '<id>' not found`, `Error: ambiguous ID '<id>' matches multiple tickets`) reach stderr unchanged, exit 1. The output is captured before it is parsed, and the awk program reads to the end of its input, so `set -o pipefail` never sees a SIGPIPE.
+
+The `id:` field is read from the leading front matter only: line 1 of the captured output must be exactly `---`, and the scan stops at the next `---`. A line matching `id:` in the body, or in the computed sections `tk show` appends after the file content, is never seen - the awk program exits as soon as the front matter closes.
+
+An empty result (no `id:` field found in the front matter) is refused: `Error: ticket '<input>' has no id field (run tk lint)`.
+
+The result must also name the file core actually resolved, or it is refused: `Error: ticket '<input>': file name and id field differ (run tk lint)`, unless ALL of:
+
+- `$TICKETS_DIR/$id.md` exists;
+- `$id` contains `<input>` as a substring;
+- if `$TICKETS_DIR/<input>.md` exists (the exact match core prefers), `$id` equals `<input>`.
+
+This is sufficient because core resolves either the exact file `<input>.md` or the unique file matching `*<input>*.md`. In the exact case the id must equal the input. In the partial case, if `$id.md` exists and `$id` contains the input, then `$id.md` itself matches `*<input>*.md`, and since that match is unique it IS the file core resolved.
+
+All later steps and all output use full IDs.
 
 ### Steps
 
@@ -174,11 +203,12 @@ New `features/ticket_close_guard.feature`, existing step definitions only (no ne
 |---|---|
 | Guards | open blocker -> exit 1, status unchanged, no `Closed:` note, message names `--force` and `tk super close`; open child -> the same; blocker and child together -> both `Error:` lines; closed blocker / closed child do not refuse |
 | Dependents | `wontdo` with an open dependent refused and the dependent listed; `duplicate` and `superseded` likewise; a dependent that is also blocked by another ticket still counts; `done` with open dependents is allowed; closed dependents do not refuse |
-| Force | `--force` closes despite blocker + child, prints `Warning:` lines, note has the `Forced: open blockers ...; open children ...` line; `--force` without violations writes no `Forced:` line |
+| Force | `--force` closes despite blocker + child, prints `Warning:` lines, note has the `Forced: open blockers ...; open children ...` line; `--force` without violations writes no `Forced:` line; a target with two blockers, a child AND a dependent at once records all three classes in one `Forced:` line |
 | Notes | exact first line for each of the four reasons; `duplicate` / `superseded` with `-m` append ` - <text>`; `--ref` given as a partial ID is written as the full ID |
-| Usage | missing `--reason`, invalid reason, `done` without `-m`, `wontdo` without `-m`, empty `-m`, `duplicate` without `--ref`, `--ref` with `done`, unknown flag, no ID, two IDs -> exit 2 and status unchanged; `--reason=<r>` form; flags before the ID; `--help` exits 0 |
+| Usage | missing `--reason`, invalid reason, `done` without `-m`, `wontdo` without `-m`, empty `-m`, a newline in `-m`, an empty or whitespace-only `<id>`, `duplicate` without `--ref`, `superseded` without `--ref`, `duplicate` with `--ref` and an empty `-m`, `--ref` with `done`, unknown flag, no ID, two IDs -> exit 2 and status unchanged; `--reason` / `-m` / `--ref` as the last argument (no following value); `--reason=<r>` form; flags before the ID; `--` ends options; no tickets directory; `--help` exits 0 |
+| ID consistency | target or `--ref` resolves to a ticket whose file name and `id` field differ -> refused, both tickets left untouched; a ticket with no `id` field but a body line naming another ticket -> refused; a body line naming another ticket does not confuse a well-formed ticket's own id; an ID that is an exact prefix of another (`cl-1` / `cl-12`) closes only itself |
 | IDs | partial target ID; unknown ID -> core's error text, exit 1; ambiguous ID -> exit 1; unknown `--ref` -> exit 1 and target still open; `--ref` equal to the target -> exit 1 |
-| Already closed | `<id> is already closed`, exit 0, no second note |
+| Already closed | `<id> is already closed`, exit 0, no second note; an `in_progress` target closes normally |
 | Report | `Now ready:` lists the unblocked dependent and omits one still blocked by another ticket; `Nothing became ready`; parent hint when the last open child closes; no hint while a sibling is open |
 | Bypass | `tk super close <id>` closes a blocked ticket with no note |
 
