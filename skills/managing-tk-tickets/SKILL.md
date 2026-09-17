@@ -29,7 +29,7 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 | Pick work (only from here) | `tk ready` |
 | What waits on what | `tk show <id>`, `tk dep tree <id>`, `tk blocked` |
 | Filter | `tk ls --status=in_progress`, `tk ls --tag=x` |
-| Hard blocker / soft relation | `tk dep <blocked> <blocker> --reason "<why>"` / `tk link <a> <b>` |
+| Hard blocker / soft relation | `tk dep <blocked> <blocker> --reason "<reason>"` / `tk link <a> <b>` |
 | History | `tk add-note <id> "text"` (append-only, timestamped) |
 
 Search open tickets (content = `tk find`, tags = `tk query`); patterns are case-insensitive regexes, OR-ed; exit 1 = no hit:

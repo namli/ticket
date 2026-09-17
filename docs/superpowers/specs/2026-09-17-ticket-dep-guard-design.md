@@ -33,7 +33,7 @@ tk undep <id> <dep-id> (--reason <text> | --no-note)
 
 | Flag | Effect |
 |---|---|
-| `--reason <text>`, `--reason=<text>` | Reason for the change, written as a note on `<id>`. Required unless `--no-note`. Must not be empty. |
+| `--reason <text>`, `--reason=<text>` | Reason for the change, written as a note on `<id>`. Required unless `--no-note`. Must not be empty. A value that is itself `--no-note`, `-h` or `--help` is a usage error. |
 | `--no-note` | Change the dependency without writing a note. Mutually exclusive with `--reason`. |
 | `-h`, `--help` | Print usage on stdout, exit 0. |
 | `--` | End of options. |
@@ -46,7 +46,7 @@ Exit codes:
 |---|---|
 | 0 | Dependency added / removed, or `dep` found it already present. |
 | 1 | Guard refused (self-dependency, cycle), ticket not found or ambiguous, `undep` of a dependency that is not there, a delegated built-in failed, or the post-check failed. |
-| 2 | Usage error: unknown flag, wrong number of IDs, neither `--reason` nor `--no-note`, both of them, empty reason; or no tickets directory (`TICKETS_DIR` unset or not a directory). Message and usage on stderr. |
+| 2 | Usage error: unknown flag, wrong number of IDs, neither `--reason` nor `--no-note`, both of them, empty reason; or no tickets directory found. When run through `tk`, a `TICKETS_DIR` that is set but missing is rejected by the core dispatcher with exit 1 before the plugin starts. Message and usage on stderr. |
 
 ## Behaviour
 
@@ -69,17 +69,18 @@ Both IDs are resolved the way `ticket_path` in core does it: trim whitespace, ex
    stderr, exit 1, no file touched. The printed path is the new edge followed by the existing path from `<dep-id>` back to `<id>`.
 5. `"$TK_SCRIPT" super dep <id> <dep-id>`, output captured.
 6. Post-check: `<dep-id>` must now be an exact element of `<id>`'s `deps`. If it is, print the captured output (`Added dependency: <id> -> <dep-id>`). If not - core's substring check answered "Dependency already exists" because `<dep-id>` is a substring of another dependency - print `Error: tk super dep did not add <dep-id> to <id> (core matched it as a substring of an existing dependency)` on stderr, exit 1, no note. The plugin never edits ticket files itself, so it reports this core bug instead of working around it.
-7. Unless `--no-note`: `"$TK_SCRIPT" super add-note <id> "Blocked by <dep-id>: <text>"`. The built-in's `Note added to ...` line is replaced by `Note: Blocked by <dep-id>: <text>`.
+7. Unless `--no-note`: `"$TK_SCRIPT" super add-note <id> "Blocked by <dep-id>: <text>"`. The built-in's `Note added to ...` line is replaced by `Note: Blocked by <dep-id>: <text>`. If `add-note` fails: `Error: the dependency was changed but the note was not written`, exit 1.
 8. Print the state line.
 
 ### undep
 
 1. Resolve both IDs.
 2. `<dep-id>` is not an exact element of `<id>`'s `deps`: print `Dependency not found`, exit 1, no note.
-3. `"$TK_SCRIPT" super undep <id> <dep-id>`, output captured.
-4. Post-check: `<dep-id>` must no longer be an element of `deps`. If so, print the captured output (`Removed dependency: <id> -/-> <dep-id>`); otherwise `Error: tk super undep did not remove <dep-id> from <id>` on stderr, exit 1, no note.
-5. Unless `--no-note`: note `No longer blocked by <dep-id>: <text>`, reported as `Note: No longer blocked by <dep-id>: <text>`.
-6. Print the state line.
+3. Sibling guard: core removes `<dep-id>` with unanchored sed patterns. If any OTHER element of `deps` contains `<dep-id>` as a substring or matches it as a regular expression, refuse: `Error: tk super undep would also damage <sibling> (core removes <dep-id> as an unanchored pattern)` plus a line telling the user to remove it from the ticket file by hand; stderr, exit 1, no file touched, no bypass hint (the bypass is what does the damage).
+4. `"$TK_SCRIPT" super undep <id> <dep-id>`, output captured.
+5. Post-check: `<dep-id>` must no longer be an element of `deps`. If so, print the captured output (`Removed dependency: <id> -/-> <dep-id>`); otherwise `Error: tk super undep did not remove <dep-id> from <id>` on stderr, exit 1, no note. The remaining dependencies must equal the previous list minus `<dep-id>`; otherwise `Error: tk super undep changed other dependencies of <id>; they were: ...`, exit 1, no note.
+6. Unless `--no-note`: note `No longer blocked by <dep-id>: <text>`, reported as `Note: No longer blocked by <dep-id>: <text>`. If `add-note` fails: `Error: the dependency was changed but the note was not written`, exit 1.
+7. Print the state line.
 
 ### State line
 
@@ -106,7 +107,7 @@ One file, `plugins/ticket-dep`, plus the symlink `plugins/ticket-undep -> ticket
 
 ```bash
 #!/usr/bin/env bash
-# tk-plugin: Guarded dep/undep: reject self-deps and cycles, record the reason
+# tk-plugin: Guarded dep/undep (shadows built-in, needs --reason): rejects self-deps and cycles
 # tk-plugin-version: 1.0.0
 ```
 
@@ -143,6 +144,7 @@ New `features/ticket_dep_guard.feature`; one new step, `ticket "<id>" should not
 | IDs | partial IDs resolve; nonexistent ID -> core's error text, exit 1 |
 | Pass-through | `tk dep tree <id>` and `tk dep cycle` work through the plugin |
 | Bypass | `tk super dep A A` still succeeds (built-in untouched) |
+| undep sibling guard | substring sibling (`abc-001` / `abc-0012`) refused, `deps` unchanged, no note; pattern sibling (`a.b-0001` / `axb-0001`) refused; removing the longer ID works |
 
 Existing scenarios that exercise the built-in with `ticket dep <a> <b>` / `ticket undep <a> <b>` switch to `ticket super dep` / `ticket super undep`: six in `features/ticket_dependencies.feature`, one in `features/id_resolution.feature`, one in `features/ticket_directory.feature`. They test core behaviour, and `features/environment.py` puts `plugins/` on `PATH` for the whole suite, so without `super` they would reach the guard. The `dep tree` scenarios stay as they are and double as pass-through coverage. This sets the rule for the other guard plugins (`tic-yxrw`, `tic-6rw0`): core scenarios of a shadowed command go through `super`.
 

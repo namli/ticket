@@ -79,6 +79,7 @@ What the guard adds to the built-in:
 - `tk dep A A` is refused.
 - A dependency that would close a cycle is refused and the cycle is shown (`A -> B -> C -> A`). Closed tickets count as edges, as in `tk lint`. The check does not rely on `tk dep cycle`.
 - "Already exists" / "not found" compare whole IDs; the built-in matches substrings of the `deps:` line. If the built-in refuses a dependency because of that, the plugin reports it (exit 1) instead of printing a false "already exists".
+- `tk undep` refuses (exit 1) when the built-in would damage another dependency: it removes the ID as an unanchored pattern, so removing `abc-001` next to `abc-0012`, or `a.b-0001` next to `axb-0001`, would corrupt `deps`. Such a dependency has to be removed by editing the ticket file. After every `undep` the plugin also checks that the other dependencies are unchanged.
 - `--reason <text>` is required and is written as a note on `<id>`: `Blocked by <dep-id>: <text>` for `dep`, `No longer blocked by <dep-id>: <text>` for `undep`. `--no-note` skips the note.
 - The last output line says where the ticket stands: `<id> is ready`, `<id> is blocked by: <dep> [<status>], ...` or `<id> is closed`.
 

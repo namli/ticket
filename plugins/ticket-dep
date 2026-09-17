@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tk-plugin: Guarded dep/undep: reject self-deps and cycles, record the reason
+# tk-plugin: Guarded dep/undep (shadows built-in, needs --reason): rejects self-deps and cycles
 # tk-plugin-version: 1.0.0
 set -euo pipefail
 
@@ -44,6 +44,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --reason)
             [[ $# -ge 2 ]] || die_usage "--reason requires a text"
+            case "$2" in
+                --no-note|-h|--help) die_usage "--reason requires a text" ;;
+            esac
             reason="$2"; have_reason=1; shift 2 ;;
         --reason=*) reason="${1#--reason=}"; have_reason=1; shift ;;
         --no-note) no_note=1; shift ;;
@@ -125,6 +128,7 @@ has_dep() {
 # Would <id> -> <dep-id> close a cycle? Walks deps from <dep-id>, every status:
 # a closed ticket can be reopened, so it counts as an edge (like ticket-lint).
 # Found: prints "id -> dep-id -> ... -> id", returns 0. Not found: returns 1.
+# Parses deps itself instead of calling deps_of: one awk pass for all tickets, not one process per node.
 cycle_path() {
     awk -v target="$1" -v from="$2" '
     FNR == 1 {
@@ -158,7 +162,10 @@ cycle_path() {
 }
 
 write_note() {
-    "$TK_SCRIPT" super add-note "$1" "$2" >/dev/null
+    if ! "$TK_SCRIPT" super add-note "$1" "$2" >/dev/null; then
+        echo "Error: the dependency was changed but the note was not written" >&2
+        exit 1
+    fi
     echo "Note: $2"
 }
 
@@ -205,7 +212,11 @@ if [[ "$mode" == "dep" ]]; then
         echo "Error: cycle check failed" >&2
         exit 1
     fi
-    out=$("$TK_SCRIPT" super dep "$id" "$dep_id") || { [[ -n "$out" ]] && echo "$out" >&2; exit 1; }
+    out=$("$TK_SCRIPT" super dep "$id" "$dep_id") || {
+        [[ -n "$out" ]] && echo "$out" >&2
+        echo "Error: tk super dep failed" >&2
+        exit 1
+    }
     if ! has_dep "$id" "$dep_id"; then
         echo "Error: tk super dep did not add $dep_id to $id (core matched it as a substring of an existing dependency)" >&2
         exit 1
@@ -217,9 +228,28 @@ else
         echo "Dependency not found"
         exit 1
     fi
-    out=$("$TK_SCRIPT" super undep "$id" "$dep_id") || { [[ -n "$out" ]] && echo "$out" >&2; exit 1; }
+    # Core removes <dep-id> with unanchored sed patterns: it would also eat part of a
+    # sibling whose ID contains it (abc-001 in abc-0012) or matches it as a regex (a.b / axb)
+    while IFS= read -r d; do
+        [[ "$d" == "$dep_id" ]] && continue
+        if [[ "$d" == *"$dep_id"* || "$d" =~ $dep_id ]]; then
+            echo "Error: tk super undep would also damage $d (core removes $dep_id as an unanchored pattern)" >&2
+            echo "Remove $dep_id from deps in $TICKETS_DIR/$id.md by hand" >&2
+            exit 1
+        fi
+    done < <(deps_of "$id")
+    expected=$(deps_of "$id" | grep -vxF -- "$dep_id" || true)
+    out=$("$TK_SCRIPT" super undep "$id" "$dep_id") || {
+        [[ -n "$out" ]] && echo "$out" >&2
+        echo "Error: tk super undep failed" >&2
+        exit 1
+    }
     if has_dep "$id" "$dep_id"; then
         echo "Error: tk super undep did not remove $dep_id from $id" >&2
+        exit 1
+    fi
+    if [[ "$(deps_of "$id")" != "$expected" ]]; then
+        echo "Error: tk super undep changed other dependencies of $id; they were: ${expected//$'\n'/, }" >&2
         exit 1
     fi
     echo "$out"

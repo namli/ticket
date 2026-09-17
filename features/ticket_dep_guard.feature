@@ -285,3 +285,58 @@ Feature: Guarded dep and undep
     Then the exit code should be 0
     And the output line 1 should contain "Dependency already exists"
     And the output line 2 should contain "guard-0001 is blocked by: guard-0002 [open]"
+
+  # --- undep: core's unanchored removal ---
+
+  Scenario: undep refuses when core would damage a sibling whose ID contains the removed ID
+    Given a ticket exists with ID "abc-001" and title "Short"
+    And a ticket exists with ID "abc-0012" and title "Long"
+    And ticket "guard-0001" depends on "abc-0012"
+    And ticket "guard-0001" depends on "abc-001"
+    When I run "ticket undep guard-0001 abc-001 --reason 'gone'"
+    Then the exit code should be 1
+    And the error output should contain "would also damage abc-0012"
+    And ticket "guard-0001" should contain "deps: [abc-0012, abc-001]"
+    And ticket "guard-0001" should not contain "No longer blocked by"
+
+  Scenario: undep refuses when core would match a sibling ID as a pattern
+    Given a ticket exists with ID "a.b-0001" and title "Dotted"
+    And a ticket exists with ID "axb-0001" and title "Plain"
+    And ticket "guard-0001" depends on "a.b-0001"
+    And ticket "guard-0001" depends on "axb-0001"
+    When I run "ticket undep guard-0001 a.b-0001 --reason 'gone'"
+    Then the exit code should be 1
+    And the error output should contain "would also damage axb-0001"
+    And ticket "guard-0001" should contain "deps: [a.b-0001, axb-0001]"
+    And ticket "guard-0001" should not contain "No longer blocked by"
+
+  Scenario: undep of the longer ID leaves the shorter sibling alone
+    Given a ticket exists with ID "abc-001" and title "Short"
+    And a ticket exists with ID "abc-0012" and title "Long"
+    And ticket "guard-0001" depends on "abc-0012"
+    And ticket "guard-0001" depends on "abc-001"
+    When I run "ticket undep guard-0001 abc-0012 --reason 'gone'"
+    Then the exit code should be 0
+    And ticket "guard-0001" should contain "deps: [abc-001]"
+    And ticket "guard-0001" should contain "No longer blocked by abc-0012: gone"
+
+  # --- more usage errors ---
+
+  Scenario: Whitespace-only reason is a usage error
+    When I run "ticket dep guard-0001 guard-0002 --reason '   '"
+    Then the exit code should be 2
+    And the error output should contain "--reason must not be empty"
+    And ticket "guard-0001" should contain "deps: []"
+
+  Scenario: --reason as the last argument is a usage error
+    When I run "ticket dep guard-0001 guard-0002 --reason"
+    Then the exit code should be 2
+    And the error output should contain "--reason requires a text"
+    And ticket "guard-0001" should contain "deps: []"
+
+  Scenario: --reason does not swallow a following flag
+    When I run "ticket dep guard-0001 guard-0002 --reason --no-note"
+    Then the exit code should be 2
+    And the error output should contain "--reason requires a text"
+    And ticket "guard-0001" should contain "deps: []"
+    And ticket "guard-0001" should not contain "Blocked by"
