@@ -40,3 +40,7 @@ Guard style decided in tic-zmz1: option A - plugins/ticket-close shadows built-i
 **2026-09-17T15:23:06Z**
 
 Design update from tic-5lpp: 'reuse tk impact --ids-ready' now reads 'tk impact --porcelain' - blocker / child lines for the guard, ready lines for the unblock report, last-child for the parent hint. Spec: docs/superpowers/specs/2026-09-17-ticket-impact-design.md
+
+**2026-09-17T16:34:15Z**
+
+Open design question from the tic-5lpp final review, deferred here by the user (2026-09-17): add a 'target <full-id>' line to 'tk impact --porcelain' so ticket-close / ticket-reopen do not re-resolve a partial ID themselves (a third copy of the find block). Additive, legal within the 1.x porcelain contract (consumers ignore unknown kinds). Decide when designing ticket-close.
