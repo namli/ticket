@@ -19,7 +19,7 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 - `tk reopen` silently re-blocks dependents and sets `open`; restore work in progress with `tk status <id> in_progress`.
 - Self-deps and cycles are accepted: run `tk dep cycle` after every dep change. `tk start` works on a blocked ticket - never do it.
 - No command changes title / priority / tags / parent / body, and `tk edit` needs a terminal: edit `.tickets/<id>.md` directly. Status, deps, links, notes go ONLY through `tk`.
-- `tk query` returns front matter only; search content with `grep`. `tk show <id>` renders **Blockers**, **Blocking**, **Children**.
+- `tk query` returns front matter only; search content with `tk find`. `tk show <id>` renders **Blockers**, **Blocking**, **Children**.
 - `tk create` prints only the ID. Write it on ONE line: a `# comment` after a `\` ends the command and leaves a junk ticket. In double quotes escape `$`.
 
 ## Quick reference
@@ -32,11 +32,13 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 | Hard blocker / soft relation | `tk dep <blocked> <blocker>` / `tk link <a> <b>` |
 | History | `tk add-note <id> "text"` (append-only, timestamped) |
 
-Search open tickets (content = `grep`, tags = `tk query`):
+Search open tickets (content = `tk find`, tags = `tk query`); patterns are case-insensitive regexes, OR-ed; exit 1 = no hit:
 ```bash
-grep -L '^status: closed' .tickets/*.md | xargs -r grep -il 'ClassName\|path/to/file'
+tk find 'ClassName' 'path/to/file'
+tk find -T tag 'ClassName'
 tk query '.status != "closed" and (.tags | index("tag"))' | jq -r .id
 ```
+`--all` adds closed tickets. No `tk find` (plugin not installed): `grep -L '^status: closed' .tickets/*.md | xargs -r grep -il 'ClassName\|path/to/file'`.
 
 ## Creating
 
