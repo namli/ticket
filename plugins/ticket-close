@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# tk-plugin: Guarded close: refuse unsafe closes, record the reason, report what got unblocked
+# tk-plugin-version: 1.0.0
+set -euo pipefail
+
+usage() {
+    echo "Usage: tk close <id> --reason done|wontdo|duplicate|superseded [-m <text>] [--ref <id>] [--force]"
+    echo "  --reason <r>  resolution; done and wontdo require -m, duplicate and superseded require --ref"
+    echo "  -m <text>     what was delivered / why it will not be done; written into the Closed: note"
+    echo "  --ref <id>    the ticket this one duplicates or is superseded by"
+    echo "  --force       close despite open blockers, children or dependents; recorded in the note"
+    echo "Bypass the guard: tk super close <id>"
+}
+
+die_usage() {
+    echo "Error: $1" >&2
+    usage >&2
+    exit 2
+}
+
+if [[ -z "${TK_SCRIPT:-}" ]]; then
+    echo "Error: TK_SCRIPT is not set; run this plugin through tk" >&2
+    exit 2
+fi
+
+reason="" text="" ref="" have_text=0 have_ref=0 force=0
+ids=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --reason)
+            [[ $# -ge 2 ]] || die_usage "--reason requires a value"
+            reason="$2"; shift 2 ;;
+        --reason=*) reason="${1#--reason=}"; shift ;;
+        -m)
+            [[ $# -ge 2 ]] || die_usage "-m requires a text"
+            text="$2"; have_text=1; shift 2 ;;
+        --ref)
+            [[ $# -ge 2 ]] || die_usage "--ref requires a ticket ID"
+            ref="$2"; have_ref=1; shift 2 ;;
+        --ref=*) ref="${1#--ref=}"; have_ref=1; shift ;;
+        --force) force=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; while [[ $# -gt 0 ]]; do ids+=("$1"); shift; done ;;
+        -*) die_usage "unknown option: $1" ;;
+        *) ids+=("$1"); shift ;;
+    esac
+done
+
+[[ ${#ids[@]} -eq 1 ]] || die_usage "expected exactly one <id>"
+[[ -n "$reason" ]] || die_usage "--reason is required"
+case "$reason" in
+    done|wontdo)
+        [[ $have_ref -eq 0 ]] || die_usage "--ref is only valid with --reason duplicate|superseded"
+        [[ $have_text -eq 1 ]] || die_usage "--reason $reason requires -m <text>"
+        [[ -n "${text//[[:space:]]/}" ]] || die_usage "-m must not be empty"
+        ;;
+    duplicate|superseded)
+        [[ $have_ref -eq 1 && -n "${ref//[[:space:]]/}" ]] || die_usage "--reason $reason requires --ref <id>"
+        [[ $have_text -eq 0 || -n "${text//[[:space:]]/}" ]] || die_usage "-m must not be empty"
+        ;;
+    *) die_usage "invalid --reason '$reason' (done|wontdo|duplicate|superseded)" ;;
+esac
+
+if [[ -z "${TICKETS_DIR:-}" || ! -d "$TICKETS_DIR" ]]; then
+    echo "Error: no .tickets directory found (searched parent directories)" >&2
+    exit 2
+fi
+
+# Full ID on stdout. Core resolves it (exact or partial) and prints its own
+# errors; the output is captured first so pipefail never sees a SIGPIPE.
+resolve_id() {
+    local out
+    out=$("$TK_SCRIPT" super show "$1") || return 1
+    awk '/^id:/ && !done { print $2; done = 1 }' <<< "$out"
+}
+
+id=$(resolve_id "${ids[0]}") || exit 1
+if [[ $have_ref -eq 1 ]]; then
+    ref=$(resolve_id "$ref") || exit 1
+    if [[ "$ref" == "$id" ]]; then
+        if [[ "$reason" == "duplicate" ]]; then
+            echo "Error: $id cannot be a duplicate of itself" >&2
+        else
+            echo "Error: $id cannot be superseded by itself" >&2
+        fi
+        exit 1
+    fi
+fi
+
+if ! command -v ticket-impact >/dev/null 2>&1 && ! command -v tk-impact >/dev/null 2>&1; then
+    echo "Error: tk close needs the ticket-impact plugin on PATH" >&2
+    echo "Use 'tk super close' to bypass the guard" >&2
+    exit 1
+fi
+
+# Taken before the close: tk impact computes every fact as if the ticket were
+# already closed, so this is the guard input and the forecast for the report.
+facts=$("$TK_SCRIPT" impact --porcelain "$id") || exit $?
+
+if [[ "$(awk '$1 == "status" { print $2 }' <<< "$facts")" == "closed" ]]; then
+    echo "$id is already closed"
+    exit 0
+fi
+
+case "$reason" in
+    done) note="Closed: done - $text" ;;
+    wontdo) note="Closed: won't do - $text" ;;
+    duplicate) note="Closed: duplicate of $ref" ;;
+    superseded) note="Closed: superseded by $ref" ;;
+esac
+if [[ "$reason" != "done" && "$reason" != "wontdo" && $have_text -eq 1 ]]; then
+    note="$note - $text"
+fi
+
+"$TK_SCRIPT" super add-note "$id" "$note" >/dev/null || exit 1
+if ! "$TK_SCRIPT" super close "$id"; then
+    echo "Error: note written but tk super close failed" >&2
+    exit 1
+fi
+echo "Note: $note"
