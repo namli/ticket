@@ -1,6 +1,6 @@
 ---
 id: tic-yxrw
-status: in_progress
+status: closed
 deps: [tic-zmz1, tic-5lpp]
 links: []
 created: 2026-09-17T11:29:13Z
@@ -48,3 +48,7 @@ Open design question from the tic-5lpp final review, deferred here by the user (
 **2026-09-17T16:49:28Z**
 
 Design decisions (spec docs/superpowers/specs/2026-09-17-ticket-close-guard-design.md): no 'target' line in 'tk impact --porcelain' - target and --ref are resolved through 'tk super show' (no copy of the find block, ticket-impact stays 1.0.0); -m required for done/wontdo, optional for duplicate/superseded; one --force overrides all guards and adds a 'Forced: ...' second line to the Closed note; already closed -> exit 0, no note.
+
+**2026-09-17T18:32:51Z**
+
+Closed: done - plugins/ticket-close 1.0.0: guarded tk close with --reason, Closed: note, unblock report
