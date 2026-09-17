@@ -122,6 +122,41 @@ has_dep() {
     return 1
 }
 
+# Would <id> -> <dep-id> close a cycle? Walks deps from <dep-id>, every status:
+# a closed ticket can be reopened, so it counts as an edge (like ticket-lint).
+# Found: prints "id -> dep-id -> ... -> id", returns 0. Not found: returns 1.
+cycle_path() {
+    awk -v target="$1" -v from="$2" '
+    FNR == 1 {
+        n = split(FILENAME, parts, "/")
+        cur = parts[n]
+        sub(/\.md$/, "", cur)
+        fm = ($0 == "---") ? 1 : 2
+        next
+    }
+    fm == 1 && /^---$/ { fm = 2; next }
+    fm == 1 && /^deps:/ {
+        v = substr($0, index($0, ":") + 1)
+        gsub(/[][]/, "", v); gsub(/[ \t]/, "", v)
+        deps[cur] = v
+    }
+    END {
+        head = 1; tail = 1; queue[1] = from; seen[from] = 1; found = 0
+        while (head <= tail) {
+            node = queue[head++]
+            if (node == target) { found = 1; break }
+            n = split(deps[node], a, ",")
+            for (i = 1; i <= n; i++) if (a[i] != "" && !(a[i] in seen)) {
+                seen[a[i]] = 1; parent[a[i]] = node; queue[++tail] = a[i]
+            }
+        }
+        if (!found) exit 1
+        path = target
+        for (node = target; node != from; ) { node = parent[node]; path = node " -> " path }
+        print target " -> " path
+    }' "$TICKETS_DIR"/*.md
+}
+
 write_note() {
     "$TK_SCRIPT" super add-note "$1" "$2" >/dev/null
     echo "Note: $2"
@@ -139,6 +174,16 @@ if [[ "$mode" == "dep" ]]; then
     if has_dep "$id" "$dep_id"; then
         echo "Dependency already exists"
         exit 0
+    fi
+    rc=0
+    path=$(cycle_path "$id" "$dep_id") || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        echo "Error: $id -> $dep_id would create a cycle: $path" >&2
+        echo "Use 'tk super dep' to bypass the guard" >&2
+        exit 1
+    elif [[ $rc -ne 1 ]]; then
+        echo "Error: cycle check failed" >&2
+        exit 1
     fi
     out=$("$TK_SCRIPT" super dep "$id" "$dep_id") || { [[ -n "$out" ]] && echo "$out" >&2; exit 1; }
     if ! has_dep "$id" "$dep_id"; then

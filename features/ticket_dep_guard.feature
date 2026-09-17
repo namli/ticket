@@ -188,3 +188,47 @@ Feature: Guarded dep and undep
     When I run "ticket super dep guard-0001 guard-0001"
     Then the exit code should be 0
     And ticket "guard-0001" should contain "deps: [guard-0001]"
+
+  # --- Cycles ---
+
+  Scenario: Two-node cycle is rejected
+    Given ticket "guard-0002" depends on "guard-0001"
+    When I run "ticket dep guard-0001 guard-0002 --reason 'loop'"
+    Then the exit code should be 1
+    And the error output should contain "guard-0001 -> guard-0002 would create a cycle: guard-0001 -> guard-0002 -> guard-0001"
+    And the error output should contain "tk super dep"
+    And ticket "guard-0001" should contain "deps: []"
+    And ticket "guard-0001" should not contain "Blocked by"
+
+  Scenario: Three-node cycle is rejected
+    Given ticket "guard-0002" depends on "guard-0003"
+    And ticket "guard-0003" depends on "guard-0001"
+    When I run "ticket dep guard-0001 guard-0002 --reason 'loop'"
+    Then the exit code should be 1
+    And the error output should contain "would create a cycle: guard-0001 -> guard-0002 -> guard-0003 -> guard-0001"
+    And ticket "guard-0001" should contain "deps: []"
+    And ticket "guard-0001" should not contain "Blocked by"
+
+  Scenario: A cycle through a closed ticket is rejected
+    Given ticket "guard-0002" depends on "guard-0003"
+    And ticket "guard-0003" depends on "guard-0001"
+    And ticket "guard-0003" has status "closed"
+    When I run "ticket dep guard-0001 guard-0002 --reason 'loop'"
+    Then the exit code should be 1
+    And the error output should contain "would create a cycle"
+    And ticket "guard-0001" should contain "deps: []"
+
+  Scenario: A diamond is not a cycle
+    Given a ticket exists with ID "guard-0004" and title "Fourth"
+    And ticket "guard-0001" depends on "guard-0002"
+    And ticket "guard-0001" depends on "guard-0003"
+    And ticket "guard-0002" depends on "guard-0004"
+    When I run "ticket dep guard-0003 guard-0004 --reason 'shared base'"
+    Then the exit code should be 0
+    And ticket "guard-0003" should contain "deps: [guard-0004]"
+
+  Scenario: A dependency on a missing ticket file does not break the walk
+    Given ticket "guard-0002" has raw field "deps" set to "[ghost-9999]"
+    When I run "ticket dep guard-0001 guard-0002 --no-note"
+    Then the exit code should be 0
+    And ticket "guard-0001" should contain "deps: [guard-0002]"
