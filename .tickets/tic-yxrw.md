@@ -1,0 +1,34 @@
+---
+id: tic-yxrw
+status: open
+deps: [tic-zmz1, tic-5lpp]
+links: []
+created: 2026-09-17T11:29:13Z
+type: feature
+priority: 1
+assignee: namli
+parent: tic-sa3b
+tags: [plugins, guards, lifecycle]
+---
+# Add guarded close plugin with resolution reason and unblock report
+
+Plugin plugins/ticket-close (name depends on the guard-style decision). Today cmd_close (ticket:275) is `cmd_status "$1" closed`: it closes blocked tickets and parents with open children and records no reason, so dependents silently appear in `tk ready`. Replaces SKILL.md Closing steps 1, 4, 5, the note-prefix rule and two rows of Common mistakes.
+
+## Design
+
+Usage: tk close <id> --reason done|wontdo|duplicate|superseded [-m text] [--ref <id>] [--force]. Refuse (exit 1, explain) when the ticket has open Blockers or open Children unless --force. --reason required; duplicate/superseded require --ref. For wontdo/duplicate/superseded refuse while open dependents exist (they would become falsely ready) unless --force, and list them. Write the note through `"$TK_SCRIPT" super add-note` with the exact prefixes `Closed: done - `, `Closed: won't do - `, `Closed: duplicate of <id>`, `Closed: superseded by <id>`, then `"$TK_SCRIPT" super close`. Afterwards print tickets that became ready (reuse `tk impact --ids-ready`) and "last child closed, consider closing parent <id>". Does NOT replace the STOP AND ASK step of the skill.
+
+## Acceptance Criteria
+
+Scenarios in features/ticket_close_guard.feature: refuses with open blocker; refuses with open child; --force overrides; missing --reason fails; note text has the right prefix for each reason; wontdo with open dependents refused; unblocked tickets printed; parent hint printed; `tk super close` still bypasses. Behave scenarios added and `make test` passes; README.md usage block, plugins/README.md and CHANGELOG.md (### Plugins, version 1.0.0) updated; plugin has tk-plugin and tk-plugin-version metadata; NOT added to pkg/extras.txt (new plugin, not a core extraction).
+
+
+## Notes
+
+**2026-09-17T11:29:13Z**
+
+Blocked by tic-zmz1: plugin name and whether it shadows `tk close` are not decided yet
+
+**2026-09-17T11:29:13Z**
+
+Blocked by tic-5lpp: close reports newly ready tickets and refuses on false-ready dependents by calling `tk impact --ids-ready` instead of duplicating the graph logic
