@@ -21,6 +21,7 @@
 - ticket-query 1.0.0: Output tickets as JSON, optionally filtered with jq (extracted from core)
 - ticket-migrate-beads 1.0.0: Import tickets from .beads/issues.jsonl (extracted from core)
 - ticket-lint 1.0.0: New plugin, `tk lint [--conventions] [--strict]` checks tickets for broken graph invariants (self-deps, cycles, missing references, asymmetric links, invalid fields) in `file:line: level: message [rule]` format
+- ticket-find 1.0.0: New plugin, `tk find [--all] [-T tag] <pattern>...` searches title, body and notes of non-closed tickets (case-insensitive extended regex, patterns OR-ed) and prints `id [P2][open] - title` lines; exit 1 when nothing matches
 
 ## [0.3.2] - 2026-02-03
 
