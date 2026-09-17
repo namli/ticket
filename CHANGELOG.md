@@ -23,6 +23,7 @@
 - ticket-lint 1.0.0: New plugin, `tk lint [--conventions] [--strict]` checks tickets for broken graph invariants (self-deps, cycles, missing references, asymmetric links, invalid fields) in `file:line: level: message [rule]` format
 - ticket-find 1.0.0: New plugin, `tk find [--all] [-T tag] <pattern>...` searches title, body and notes of non-closed tickets (case-insensitive extended regex, patterns OR-ed) and prints `id [P2][open] - title` lines; exit 1 when nothing matches
 - ticket-impact 1.0.0: New plugin, `tk impact [--porcelain] <id>` shows what closing a ticket would change (open blockers and children, dependents that become ready or stay blocked, last open child of a parent); `--porcelain` prints one stable fact per line for other plugins
+- ticket-close 1.0.0: New plugin that shadows the built-in, `tk close <id> --reason done|wontdo|duplicate|superseded [-m text] [--ref id] [--force]`: refuses open blockers, open children and (for won't-do / duplicate / superseded) open dependents, writes the `Closed: <resolution>` note, prints the tickets that became ready and the last-open-child hint; requires ticket-impact; `tk super close` bypasses it
 
 ## [0.3.2] - 2026-02-03
 

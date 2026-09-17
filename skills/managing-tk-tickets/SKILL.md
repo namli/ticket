@@ -15,7 +15,7 @@ If `.tickets/` is missing, create it with the first `tk create`. If it is not tr
 
 ## tk facts that bite
 
-- ANY closed blocker counts as resolved, whatever the reason: a wrong close silently moves dependents to `tk ready`. `tk close` has no guards (closes blocked tickets and parents with open children, records no reason).
+- ANY closed blocker counts as resolved, whatever the reason: a wrong close silently moves dependents to `tk ready`. The built-in close (`tk super close`, `tk status <id> closed`) has no guards (closes blocked tickets and parents with open children, records no reason); the `ticket-close` plugin makes `tk close` guarded - `tk help` lists `close` under Plugins when it is installed.
 - `tk reopen` silently re-blocks dependents and sets `open`; restore work in progress with `tk status <id> in_progress`.
 - Self-deps and cycles are accepted: run `tk dep cycle` after every dep change. `tk start` works on a blocked ticket - never do it.
 - No command changes title / priority / tags / parent / body, and `tk edit` needs a terminal: edit `.tickets/<id>.md` directly. Status, deps, links, notes go ONLY through `tk`.
@@ -60,13 +60,13 @@ The close rides in the commit that completes the work - never earlier, never on 
 1. CHECK `tk show <id>`: no open **Blockers** (false dep -> `tk undep` + note; otherwise the work is not done); all **Children** closed; every acceptance criterion met, with evidence. Unmet -> do not close; splitting off the remainder is the user's call.
 2. Create follow-up tickets now, so they land in the same commit.
 3. STOP AND ASK. Show the evidence, the resolution, and which **Blocking** tickets really become ready (no other open blocker). Close only after an explicit yes. "It's done, commit it" authorises the commit, NOT the close - hurry does not change this.
-4. `tk add-note <id> "Closed: done - <one line: what was delivered>"`, then `tk close <id>`.
+4. `tk close <id> --reason done -m "<one line: what was delivered>"` - writes the `Closed: done - ...` note and prints what became ready. A refusal means step 1 was skipped; do not answer it with `--force`. No `ticket-close` plugin: `tk add-note <id> "Closed: done - <...>"`, then `tk close <id>`.
 5. `tk ready` -> report what became unblocked (on this branch only, until merged); last child closed -> propose closing the parent.
 6. `git add .tickets/` LAST, commit with the work. Commit fails -> fix and retry. Commit abandoned -> `tk status <id> in_progress` + note `Reopened: commit abandoned`.
 
-Note prefixes (grep `^Closed: `): `Closed: done - ...` | `Closed: won't do - <why>` | `Closed: duplicate of <id>` | `Closed: superseded by <id>`.
+Note prefixes (grep `^Closed: `), written by `tk close --reason done|wontdo|duplicate|superseded [-m "<text>"] [--ref <id>]`: `Closed: done - ...` | `Closed: won't do - <why>` | `Closed: duplicate of <id>` | `Closed: superseded by <id>`.
 
-**Won't do / duplicate / superseded:** settle every **Blocking** ticket BEFORE `tk close` - afterwards it is already falsely ready. Ask the user per dependent: not needed -> `tk undep <dependent> <id>`; replaced -> `tk undep` + `tk dep <dependent> <replacement>`; pointless without it -> close it too. Each with a note. Parent: close or detach every open child first. Ticket-only commit: ask which branch.
+**Won't do / duplicate / superseded:** settle every **Blocking** ticket BEFORE `tk close` - afterwards it is already falsely ready (`tk close --reason wontdo|duplicate|superseded` refuses while open dependents exist; settle them, do not `--force`). Ask the user per dependent: not needed -> `tk undep <dependent> <id>`; replaced -> `tk undep` + `tk dep <dependent> <replacement>`; pointless without it -> close it too. Each with a note. Parent: close or detach every open child first. Ticket-only commit: ask which branch.
 
 **Reopening** a committed close: `tk add-note <id> "Reopened: <reason>"`, `tk reopen <id>`, `tk blocked` -> report what went back; commit with the rework.
 
