@@ -22,6 +22,7 @@ tk lint [--conventions] [--strict]
 |---|---|
 | `--conventions` | Also run the convention rules (`close-note`, `dep-note`). Off by default so a plain run is clean on projects that do not follow the skill. |
 | `--strict` | Warnings also cause exit 1. |
+| `-h`, `--help` | Print usage on stdout, exit 0. |
 
 Exit codes:
 
@@ -101,7 +102,7 @@ awk program:
 - **Loading (main rules).** Front matter is strictly the lines between the first and the second `---` of a file; later `---` lines are body text. For each ticket store: file name id, `id`, `status`, `priority`, `type`, `parent`, the `deps` and `links` lists (brackets and spaces stripped, split on `,`), and the line number of each of those fields. After front matter, lines following a `## Notes` heading are stored per ticket as note lines.
 - **Checks (END).** One function per rule group, each calling a single `emit(id, line, level, rule, msg)` that owns the output format and the counters: `check_ids()`, `check_fields()`, `check_deps()` (self, missing), `check_cycles()`, `check_links()` (missing, asymmetric), `check_parents()` (missing, cycle, open child of closed), `check_state()` (blocked in progress), and `check_conventions()` only when enabled.
 - **Cycle detection.** The recursive colouring DFS and the smallest-id normalisation from `cmd_dep_cycle` (`ticket:490-600`), with two changes: closed tickets are kept in the graph, and a cycle whose members are all closed is dropped. Self-deps are skipped here (own rule). Missing targets are not traversed.
-- **Portability.** POSIX awk only (mawk on Debian/Ubuntu, BSD awk on macOS): no `gensub`, `asorti`, three-argument `match`, `PROCINFO`. No `tsort`, `jq`, `yq`, `git`.
+- **Portability.** POSIX awk only (mawk on Debian/Ubuntu, BSD awk on macOS): no `gensub`, `asorti`, three-argument `match`, `PROCINFO`. A backslash inside a bracket expression is a literal character in POSIX, so brackets are stripped with `/[][]/`, not `/[\[\]]/` (the prototype failed on busybox awk with the latter). No `tsort`, `jq`, `yq`, `git`.
 
 ## Testing
 
