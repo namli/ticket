@@ -1,8 +1,8 @@
 ---
 id: tic-mwhy
-status: in_progress
+status: closed
 deps: [tic-zmz1]
-links: [tic-5cgv, tic-seki]
+links: [tic-5cgv, tic-seki, tic-vhtd]
 created: 2026-09-17T11:29:13Z
 type: feature
 priority: 1
@@ -40,3 +40,7 @@ Guard style decided in tic-zmz1: option A - plugins/ticket-dep and plugins/ticke
 **2026-09-17T16:14:37Z**
 
 Design decisions (namli, 2026-09-17), spec: docs/superpowers/specs/2026-09-17-ticket-dep-guard-design.md. (1) --reason is required for dep AND undep unless --no-note. (2) No --force: self-dep and cycle are never legitimate, the only bypass is 'tk super dep'. (3) One script plugins/ticket-dep + symlink plugins/ticket-undep. (4) Existing scenarios that test the built-in dep/undep switch to 'ticket super dep|undep' because features/environment.py puts plugins/ on PATH; same rule applies to tic-yxrw and tic-6rw0. (5) Minimal SKILL.md / editing.md edits are in scope so the skill does not contradict the tool before tic-x75b.
+
+**2026-09-17T18:18:15Z**
+
+Closed: done - plugins/ticket-dep 1.0.0 + symlink plugins/ticket-undep shadow tk dep / tk undep: self-deps and cycles refused, exact ID comparison, --reason notes (Blocked by / No longer blocked by), state line, undep refuses when core would damage a sibling dep; 45 scenarios in features/ticket_dep_guard.feature, make test 225/225; follow-ups tic-vhtd, tic-8qs0
