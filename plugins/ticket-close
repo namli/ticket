@@ -102,6 +102,32 @@ if [[ "$(awk '$1 == "status" { print $2 }' <<< "$facts")" == "closed" ]]; then
     exit 0
 fi
 
+# IDs (second field) of the porcelain lines of the given kinds, joined with ", "
+facts_of() {
+    awk -v kinds=" $* " '
+        index(kinds, " " $1 " ") { out = out (out == "" ? "" : ", ") $2 }
+        END { print out }
+    ' <<< "$facts"
+}
+
+blockers=$(facts_of blocker)
+children=$(facts_of child)
+dependents=""
+[[ "$reason" == "done" ]] || dependents=$(facts_of ready blocked)
+
+if [[ -n "$blockers$children$dependents" ]]; then
+    if [[ $force -eq 0 ]]; then
+        [[ -z "$blockers" ]] || echo "Error: $id has open blockers: $blockers" >&2
+        [[ -z "$children" ]] || echo "Error: $id has open children: $children" >&2
+        [[ -z "$dependents" ]] || echo "Error: $id has open dependents that would see it as resolved: $dependents (settle them first: tk undep / tk dep)" >&2
+        echo "Use --force to close anyway, or 'tk super close' to bypass the guard" >&2
+        exit 1
+    fi
+    [[ -z "$blockers" ]] || echo "Warning: closing $id with open blockers: $blockers" >&2
+    [[ -z "$children" ]] || echo "Warning: closing $id with open children: $children" >&2
+    [[ -z "$dependents" ]] || echo "Warning: closing $id with open dependents: $dependents" >&2
+fi
+
 case "$reason" in
     done) note="Closed: done - $text" ;;
     wontdo) note="Closed: won't do - $text" ;;
@@ -111,10 +137,17 @@ esac
 if [[ "$reason" != "done" && "$reason" != "wontdo" && $have_text -eq 1 ]]; then
     note="$note - $text"
 fi
+first_line="$note"
+
+forced=""
+[[ -z "$blockers" ]] || forced="open blockers $blockers"
+[[ -z "$children" ]] || forced="${forced:+$forced; }open children $children"
+[[ -z "$dependents" ]] || forced="${forced:+$forced; }open dependents $dependents"
+[[ -z "$forced" ]] || note="$note"$'\n'"Forced: $forced"
 
 "$TK_SCRIPT" super add-note "$id" "$note" >/dev/null || exit 1
 if ! "$TK_SCRIPT" super close "$id"; then
     echo "Error: note written but tk super close failed" >&2
     exit 1
 fi
-echo "Note: $note"
+echo "Note: $first_line"

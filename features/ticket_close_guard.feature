@@ -205,3 +205,144 @@ Feature: Guarded Close
     And ticket "cl-0001" should have field "status" with value "closed"
     When I run "ticket show cl-0001"
     Then the output should not contain "Closed:"
+
+  # --- Guards: open blockers and open children ---
+
+  Scenario: Open blocker refuses the close
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Blocker"
+    And ticket "cl-0001" depends on "cl-0002"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 1
+    And the error output should contain "Error: cl-0001 has open blockers: cl-0002"
+    And the error output should contain "Use --force to close anyway, or 'tk super close' to bypass the guard"
+    And the output should be empty
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: A refused close writes no note
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Blocker"
+    And ticket "cl-0001" depends on "cl-0002"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    And I run "ticket show cl-0001"
+    Then the output should not contain "Closed:"
+
+  Scenario: Open child refuses the close
+    Given a ticket exists with ID "cl-0001" and title "Parent"
+    And a ticket exists with ID "cl-0002" and title "Child" with parent "cl-0001"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 1
+    And the error output should contain "Error: cl-0001 has open children: cl-0002"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: Every violation is reported at once
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Blocker one"
+    And a ticket exists with ID "cl-0003" and title "Blocker two"
+    And a ticket exists with ID "cl-0004" and title "Child" with parent "cl-0001"
+    And ticket "cl-0001" depends on "cl-0002"
+    And ticket "cl-0001" depends on "cl-0003"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 1
+    And the error output should contain "Error: cl-0001 has open blockers: cl-0002, cl-0003"
+    And the error output should contain "Error: cl-0001 has open children: cl-0004"
+
+  Scenario: Closed blocker and closed child do not refuse
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Blocker"
+    And a ticket exists with ID "cl-0003" and title "Child" with parent "cl-0001"
+    And ticket "cl-0001" depends on "cl-0002"
+    And ticket "cl-0002" has status "closed"
+    And ticket "cl-0003" has status "closed"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And ticket "cl-0001" should have field "status" with value "closed"
+    And the error output should be empty
+
+  # --- Guards: open dependents of a close that delivers nothing ---
+
+  Scenario: Won't-do close with an open dependent is refused
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And ticket "cl-0002" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason wontdo -m \"out of scope\""
+    Then the exit code should be 1
+    And the error output should contain "Error: cl-0001 has open dependents that would see it as resolved: cl-0002"
+    And the error output should contain "tk undep"
+    And ticket "cl-0001" should have field "status" with value "open"
+
+  Scenario: Duplicate close with an open dependent is refused
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And a ticket exists with ID "cl-0003" and title "Original"
+    And ticket "cl-0002" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason duplicate --ref cl-0003"
+    Then the exit code should be 1
+    And the error output should contain "open dependents that would see it as resolved: cl-0002"
+
+  Scenario: Superseded close with an open dependent is refused
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And a ticket exists with ID "cl-0003" and title "Replacement"
+    And ticket "cl-0002" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason superseded --ref cl-0003"
+    Then the exit code should be 1
+    And the error output should contain "open dependents that would see it as resolved: cl-0002"
+
+  Scenario: A dependent that is also blocked by another ticket still counts
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And a ticket exists with ID "cl-0003" and title "Other blocker"
+    And ticket "cl-0002" depends on "cl-0001"
+    And ticket "cl-0002" depends on "cl-0003"
+    When I run "ticket close cl-0001 --reason wontdo -m \"out of scope\""
+    Then the exit code should be 1
+    And the error output should contain "open dependents that would see it as resolved: cl-0002"
+
+  Scenario: Done close with open dependents is allowed
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And ticket "cl-0002" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\""
+    Then the exit code should be 0
+    And ticket "cl-0001" should have field "status" with value "closed"
+
+  Scenario: Closed dependents do not refuse a won't-do close
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And ticket "cl-0002" depends on "cl-0001"
+    And ticket "cl-0002" has status "closed"
+    When I run "ticket close cl-0001 --reason wontdo -m \"out of scope\""
+    Then the exit code should be 0
+    And ticket "cl-0001" should have field "status" with value "closed"
+
+  # --- --force ---
+
+  Scenario: Force closes despite blocker and child and records it
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Blocker"
+    And a ticket exists with ID "cl-0003" and title "Child" with parent "cl-0001"
+    And ticket "cl-0001" depends on "cl-0002"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\" --force"
+    Then the exit code should be 0
+    And the error output should contain "Warning: closing cl-0001 with open blockers: cl-0002"
+    And the error output should contain "Warning: closing cl-0001 with open children: cl-0003"
+    And ticket "cl-0001" should have field "status" with value "closed"
+    And ticket "cl-0001" should contain "Closed: done - shipped"
+    And ticket "cl-0001" should contain "Forced: open blockers cl-0002; open children cl-0003"
+
+  Scenario: Force on a won't-do close records the dependents
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    And a ticket exists with ID "cl-0002" and title "Dependent"
+    And ticket "cl-0002" depends on "cl-0001"
+    When I run "ticket close cl-0001 --reason wontdo -m \"out of scope\" --force"
+    Then the exit code should be 0
+    And the error output should contain "Warning: closing cl-0001 with open dependents: cl-0002"
+    And ticket "cl-0001" should contain "Forced: open dependents cl-0002"
+
+  Scenario: Force without violations writes no Forced line
+    Given a ticket exists with ID "cl-0001" and title "Target"
+    When I run "ticket close cl-0001 --reason done -m \"shipped\" --force"
+    And I run "ticket show cl-0001"
+    Then the output should contain "Closed: done - shipped"
+    And the output should not contain "Forced:"
