@@ -49,6 +49,16 @@ This project uses a CLI ticket system for task management. Run `tk help` when yo
 
 Claude Opus picks it up naturally from there. Other models may need additional guidance.
 
+### Agent skill
+
+`tk` validates almost nothing, so the dependency graph stays accurate only if the agent follows some conventions. The [`managing-tk-tickets`](skills/managing-tk-tickets/SKILL.md) skill teaches them: search the backlog before creating a ticket, choose between `dep`, `link` and `--parent`, check for cycles, and close a ticket only in the commit that completes the work, after asking.
+
+To install it for Claude Code, copy or symlink the directory into your skills folder:
+
+```bash
+ln -s "$PWD/skills/managing-tk-tickets" ~/.claude/skills/managing-tk-tickets
+```
+
 ## Usage
 
 ```bash
