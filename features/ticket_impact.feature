@@ -68,3 +68,120 @@ Feature: Ticket Impact
     When I run "ticket help"
     Then the command should succeed
     And the output should match pattern "impact\s+Show what closing a ticket would change"
+
+  # --- Graph facts, human output ---
+
+  Scenario: Dependent with a single blocker becomes ready
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Waiting"
+    And ticket "imp-0002" depends on "imp-0001"
+    When I run "ticket impact imp-0001"
+    Then the exit code should be 0
+    And the output should contain "Becomes ready:"
+    And the output should contain "- imp-0002 [open] Waiting"
+    And the output should not contain "Still blocked by others:"
+    And the output should not contain "No impact"
+
+  Scenario: Dependent with a second open blocker stays blocked
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Waiting"
+    And a ticket exists with ID "imp-0003" and title "Other blocker"
+    And ticket "imp-0002" depends on "imp-0001"
+    And ticket "imp-0002" depends on "imp-0003"
+    When I run "ticket impact imp-0001"
+    Then the exit code should be 0
+    And the output should contain "Still blocked by others:"
+    And the output should contain "- imp-0002 [open] Waiting <- imp-0003"
+    And the output should not contain "Becomes ready:"
+
+  Scenario: Dependent whose other blocker is closed becomes ready
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Waiting"
+    And a ticket exists with ID "imp-0003" and title "Other blocker"
+    And ticket "imp-0002" depends on "imp-0001"
+    And ticket "imp-0002" depends on "imp-0003"
+    And ticket "imp-0003" has status "closed"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "Becomes ready:"
+    And the output should contain "- imp-0002 [open] Waiting"
+    And the output should not contain "Still blocked by others:"
+
+  Scenario: Closed dependents are ignored
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Finished"
+    And ticket "imp-0002" depends on "imp-0001"
+    And ticket "imp-0002" has status "closed"
+    When I run "ticket impact imp-0001"
+    Then the exit code should be 0
+    And the output should contain "No impact: nothing depends on imp-0001"
+    And the output should not contain "imp-0002"
+
+  Scenario: Open children are listed and closed children are not
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Open child" with parent "imp-0001"
+    And a ticket exists with ID "imp-0003" and title "Closed child" with parent "imp-0001"
+    And ticket "imp-0003" has status "closed"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "Open children:"
+    And the output should contain "- imp-0002 [open] Open child"
+    And the output should not contain "imp-0003"
+
+  Scenario: Last open child of an open parent is reported
+    Given a ticket exists with ID "imp-par" and title "Epic"
+    And a ticket exists with ID "imp-0001" and title "Target" with parent "imp-par"
+    And a ticket exists with ID "imp-0002" and title "Done sibling" with parent "imp-par"
+    And ticket "imp-0002" has status "closed"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "Last open child of imp-par [open] Epic - consider closing the parent"
+
+  Scenario: Not the last child while a sibling is open
+    Given a ticket exists with ID "imp-par" and title "Epic"
+    And a ticket exists with ID "imp-0001" and title "Target" with parent "imp-par"
+    And a ticket exists with ID "imp-0002" and title "Open sibling" with parent "imp-par"
+    When I run "ticket impact imp-0001"
+    Then the output should not contain "Last open child"
+    And the output should contain "No impact: nothing depends on imp-0001"
+
+  Scenario: No last-child hint when the parent is closed
+    Given a ticket exists with ID "imp-par" and title "Epic"
+    And ticket "imp-par" has status "closed"
+    And a ticket exists with ID "imp-0001" and title "Target" with parent "imp-par"
+    When I run "ticket impact imp-0001"
+    Then the output should not contain "Last open child"
+
+  Scenario: Open blockers of the target are listed
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Blocker"
+    And a ticket exists with ID "imp-0003" and title "Resolved blocker"
+    And ticket "imp-0003" has status "closed"
+    And ticket "imp-0001" depends on "imp-0002"
+    And ticket "imp-0001" depends on "imp-0003"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "Open blockers:"
+    And the output should contain "- imp-0002 [open] Blocker"
+    And the output should not contain "imp-0003"
+
+  Scenario: A dangling blocker is shown as missing
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And ticket "imp-0001" depends on "imp-gone"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "Open blockers:"
+    And the output should contain "- imp-gone [missing]"
+
+  Scenario: A self-dependency is not a blocker
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And ticket "imp-0001" depends on "imp-0001"
+    When I run "ticket impact imp-0001"
+    Then the output should contain "No impact: nothing depends on imp-0001"
+
+  Scenario: Closed target says what a reopen would re-block
+    Given a ticket exists with ID "imp-0001" and title "Target"
+    And a ticket exists with ID "imp-0002" and title "Waiting"
+    And ticket "imp-0002" depends on "imp-0001"
+    And ticket "imp-0001" has status "closed"
+    When I run "ticket impact imp-0001"
+    Then the exit code should be 0
+    And the output line 1 should contain "imp-0001 [closed] Target"
+    And the output should contain "Already closed. Reopening would re-block:"
+    And the output should contain "- imp-0002 [open] Waiting"
+    And the output should not contain "Becomes ready:"
