@@ -7,7 +7,7 @@ description: Use when a project has a `.tickets/` directory or uses the `tk` CLI
 
 Tickets are markdown files in `.tickets/`, committed with the code (not tracked by git -> skip the git parts). Guard plugins enforce the mechanics; this skill covers what no command can decide: how tickets relate, and when one is really done.
 
-**Never rely on remembering the backlog - search it. Every status change is a graph change - report its effect.**
+**Never rely on remembering the backlog - search it. Every status change is a graph change - report its effect.** In Russian ready = "доступные", not "готовые" (= done).
 
 ## Requires the guard plugins
 
