@@ -39,6 +39,9 @@ ID=$(tk create "Imperative title" -t bug -p 2 --tags area,topic -d "What and whe
 ```
 ONE line, `$` escaped inside double quotes. The description MUST name files and classes - that is what the search finds.
 
+Types: `task` - ordinary work (default); `feature` - new functionality; `bug` - defect fix; `chore` - upkeep: dependencies, CI, cleanup; `epic` - container for child tickets, no work of its own.
+Parents: an `epic` can parent any type, including another `epic`; a non-epic is a parent only when it keeps work of its own after a split (`editing.md`).
+
 1. SEARCH open tickets for the files, classes and tags the new one touches; `tk show` every hit.
 2. CLASSIFY each hit: "can the new ticket be started AND finished before that one is merged?" No -> `tk dep`. Yes but same files or root cause -> `tk link`. Part of it -> `--parent`. Same problem -> no new ticket, `tk add-note` on the existing one. "Better first" is priority, not a dep; depend on the narrowest real blocker, never on an epic.
 3. BOTH DIRECTIONS: the new ticket may block existing ones -> `tk dep <existing> <new>`.
