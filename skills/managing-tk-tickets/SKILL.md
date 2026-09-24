@@ -38,6 +38,7 @@ Flags: `tk help`, `tk <plugin> --help`.
 ID=$(tk create "Imperative title" -t bug -p 2 --tags area,topic -d "What and where: path/File.php:line, Class::method" --design "Approach; what stays untouched" --acceptance "Checkable criteria")
 ```
 ONE line, `$` escaped inside double quotes. The description MUST name files and classes - that is what the search finds.
+**Never create unasked: show the draft, ask "add / don't add", wait.**
 
 Types: `task` - ordinary work (default); `feature` - new functionality; `bug` - defect fix; `chore` - upkeep: dependencies, CI, cleanup; `epic` - container for child tickets, no work of its own.
 Parents: an `epic` can parent any type, including another `epic`; a non-epic is a parent only when it keeps work of its own after a split (`editing.md`).
