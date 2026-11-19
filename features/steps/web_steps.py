@@ -274,6 +274,54 @@ def step_standard_projects(context):
     write_simple_ticket(context, 'beta', 'a-0001', 'Beta first')
 
 
+FULL_TICKET = """---
+id: a-0002
+status: in_progress
+deps: [a-0003, a-9999]
+links: [a-0004]
+created: 2026-01-01T00:00:00Z
+type: feature
+priority: 1
+assignee: namli
+parent: a-0001
+tags: [ui, api]
+---
+# Full ticket
+
+The description text.
+
+## Design
+
+The design text.
+
+## Acceptance Criteria
+
+The acceptance text.
+
+## Risks
+
+The risk text.
+
+## Notes
+
+**2026-02-03T04:05:06Z**
+
+A note text.
+"""
+
+
+@given(r'the web project with a full ticket')
+def step_full_ticket_project(context):
+    """alpha: a-0001 epic (parent of a-0002), a-0002 with every field and section,
+    a-0003 closed (dep of a-0002), a-0004 (linked to a-0002)."""
+    (project_dir(context, 'alpha') / '.tickets').mkdir(parents=True)
+    register_project(context, 'alpha')
+    write_simple_ticket(context, 'alpha', 'a-0001', 'The epic')
+    write_simple_ticket(context, 'alpha', 'a-0003', 'The blocker', status='closed')
+    write_simple_ticket(context, 'alpha', 'a-0004', 'The neighbour')
+    ticket_file(context, 'alpha/a-0002').write_text(FULL_TICKET, encoding='utf-8')
+
+
 @given(r'web project "(?P<name>[^"]+)" has (?P<count>\d+) closed tickets')
 def step_web_closed_tickets(context, name, count):
     for i in range(1, int(count) + 1):

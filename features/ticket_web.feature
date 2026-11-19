@@ -303,3 +303,86 @@ Feature: Web board
     And the response should contain "nofm-0001.md unparsable"
     And project "alpha" column "ready" should list "a-0002, a-0001"
     And project "alpha" column "blocked" should list "a-0003"
+
+  # --- Ticket page ---
+
+  Scenario: The ticket page shows the text of every section
+    Given the web project with a full ticket
+    And the web server is running
+    When I GET "/p/alpha/a-0002"
+    Then the response status should be 200
+    And the response should contain "Full ticket"
+    And the response should contain "The description text."
+    And the response should contain "The design text."
+    And the response should contain "The acceptance text."
+    And the response should contain "Risks"
+    And the response should contain "The risk text."
+    And the response should contain "A note text."
+    And the response should contain "2026-02-03T04:05:06Z"
+    And the response should contain "in_progress"
+    And the response should contain "feature"
+    And the response should contain "P1"
+    And the response should contain "namli"
+    And the response should contain "href=\"/p/alpha/a-0002/edit\""
+
+  Scenario: The ticket page lists parent, deps and links
+    Given the web project with a full ticket
+    And the web server is running
+    When I GET "/p/alpha/a-0002"
+    Then relation "parent" should list "a-0001"
+    And relation "deps" should list "a-0003, a-9999"
+    And relation "links" should list "a-0004"
+    And relation "deps" should contain "closed"
+    And relation "deps" should contain "missing"
+    And relation "deps" should have no link to "a-9999"
+    And the response should contain "href=\"/p/alpha/a-0003\""
+
+  Scenario: The ticket page lists children and dependents
+    Given the web project with a full ticket
+    And the web server is running
+    When I GET "/p/alpha/a-0001"
+    Then relation "children" should list "a-0002"
+    When I GET "/p/alpha/a-0003"
+    Then relation "dependents" should list "a-0002"
+    And relation "deps" should list ""
+
+  Scenario: Text on the ticket page is escaped
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Escape <b>me</b>
+
+      Use <script>alert(2)</script> & more.
+      """
+    And the web server is running
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "Escape &lt;b&gt;me&lt;/b&gt;"
+    And the response should contain "&lt;script&gt;alert(2)&lt;/script&gt; &amp; more."
+    And the response should not contain "<script>alert(2)"
+
+  Scenario Outline: A ticket page that does not exist is not found
+    Given the web project with a full ticket
+    And web ticket "alpha/nofm-0001" has content:
+      """
+      just text
+      """
+    And the web server is running
+    When I GET "<path>"
+    Then the response status should be 404
+
+    Examples:
+      | path                       |
+      | /p/alpha/zzz               |
+      | /p/nope/a-0001             |
+      | /p/alpha/..%2Fweb.toml     |
+      | /p/alpha/a-0002/extra      |
+      | /p/alpha/nofm-0001         |

@@ -20,7 +20,7 @@ import zlib
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 DEFAULT_PORT = 7420
 DEFAULT_CONFIG = '~/.config/ticket/web.toml'
@@ -467,6 +467,58 @@ def render_flat(app) -> str:
     return '\n'.join(out)
 
 
+def render_relation(project: Project, snapshot: Snapshot, rel: str, title: str, ids: list[str]) -> str:
+    if not ids:
+        return ''
+    items = []
+    for ticket_id in ids:
+        other = snapshot.tickets.get(ticket_id)
+        if other is None or not other.parsed:
+            items.append(f'<li data-id="{esc(ticket_id)}">{esc(ticket_id)} '
+                         '<span class="status">missing</span></li>')
+        else:
+            items.append(f'<li data-id="{esc(ticket_id)}">'
+                         f'<a href="/p/{esc(project.name)}/{esc(ticket_id)}">{esc(ticket_id)}</a> '
+                         f'{esc(other.title)} <span class="status">{esc(other.status)}</span></li>')
+    return f'<div class="rel"><h3>{title}</h3><ul data-rel="{rel}">{"".join(items)}</ul></div>'
+
+
+def render_text(section: str, title: str, text: str) -> str:
+    if not text:
+        return ''
+    heading = f'<h3>{esc(title)}</h3>' if title else ''
+    return f'{heading}<pre data-section="{section}">{esc(text)}</pre>'
+
+
+def render_ticket(app, project: Project, snapshot: Snapshot, ticket: Ticket) -> str:
+    parsed = sorted((t for t in snapshot.tickets.values() if t.parsed), key=lambda t: t.id)
+    children = [t.id for t in parsed if t.parent == ticket.id]
+    dependents = [t.id for t in parsed if ticket.id in t.deps]
+    base = f'/p/{esc(project.name)}/{esc(ticket.id)}'
+    meta = [('Status', ticket.status), ('Type', ticket.type), ('Priority', f'P{ticket.priority}'),
+            ('Assignee', ticket.assignee), ('Tags', ', '.join(ticket.tags)), ('Created', ticket.created)]
+    meta_html = ''.join(f'<dt>{esc(key)}</dt><dd>{esc(value)}</dd>' for key, value in meta if value)
+    out = [
+        f'<article class="ticket" style="--pc: {esc(project.color)}">',
+        f'<p class="crumb"><a href="/p/{esc(project.name)}">{esc(project.name)}</a> / {esc(ticket.id)}</p>',
+        f'<h1>{esc(ticket.title)}</h1>',
+        f'<p><a class="edit" href="{base}/edit">Edit</a></p>',
+        f'<dl class="meta">{meta_html}</dl>',
+        render_relation(project, snapshot, 'parent', 'Parent', [ticket.parent] if ticket.parent else []),
+        render_relation(project, snapshot, 'children', 'Children', children),
+        render_relation(project, snapshot, 'deps', 'Depends on', ticket.deps),
+        render_relation(project, snapshot, 'dependents', 'Blocks', dependents),
+        render_relation(project, snapshot, 'links', 'Links', ticket.links),
+        render_text('description', '', ticket.description),
+        render_text('design', 'Design', ticket.design),
+        render_text('acceptance', 'Acceptance Criteria', ticket.acceptance),
+    ]
+    out += [render_text('other', heading, text) for heading, text in ticket.others]
+    out.append(render_text('notes', 'Notes', ticket.notes))
+    out.append('</article>')
+    return '\n'.join(part for part in out if part)
+
+
 def render_project(app, project: Project, show_all: bool) -> str:
     limit = None if show_all else PROJECT_CLOSED_LIMIT
     return render_lane(app, project, limit, f'/p/{project.name}?closed=all')
@@ -487,6 +539,20 @@ class App:
             if project.name == name:
                 return project
         return None
+
+    def ticket(self, name: str, ticket_id: str):
+        """Return (project, snapshot, ticket) for a parsed ticket, else None.
+
+        The id is only ever used as a dictionary key, never as part of a file path.
+        """
+        project = self.project(name)
+        if project is None:
+            return None
+        snapshot = self.store.get(name)
+        ticket = snapshot.tickets.get(ticket_id)
+        if ticket is None or not ticket.parsed:
+            return None
+        return project, snapshot, ticket
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -541,6 +607,13 @@ class Handler(BaseHTTPRequestHandler):
         if method == 'GET' and project is not None:
             show_all = query.get('closed', [''])[0] == 'all'
             self.send_html(200, page(app, project.name, render_project(app, project, show_all)))
+            return
+        match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)/([^/]+)', path)
+        found = app.ticket(match.group(1), unquote(match.group(2))) if match else None
+        if method == 'GET' and found is not None:
+            project, snapshot, ticket = found
+            self.send_html(200, page(app, f'{ticket.id} {ticket.title}',
+                                     render_ticket(app, project, snapshot, ticket)))
             return
         self.send_error_page(404, 'Not found')
 
