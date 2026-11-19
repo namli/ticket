@@ -1,0 +1,1126 @@
+#!/usr/bin/env python3
+# tk-plugin: Local kanban board over several tk projects
+# tk-plugin-version: 1.0.0
+"""tk web - local kanban board over the tk projects listed in a config file.
+
+Usage: tk web [--port N] [--config PATH]
+Design: docs/superpowers/specs/2026-11-19-ticket-web-design.md
+"""
+
+import argparse
+import hashlib
+import html
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import tomllib
+import zlib
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlsplit
+
+DEFAULT_PORT = 7420
+DEFAULT_CONFIG = '~/.config/ticket/web.toml'
+
+EXAMPLE_CONFIG = '''\
+port = 7420
+
+[[project]]
+name = "ticket"
+path = "~/www/ticket"
+
+[[project]]
+name = "eagle"
+path = "/home/me/www/eagle"
+color = "#3b82f6"
+'''
+
+BOARD_CLOSED_LIMIT = 5
+PROJECT_CLOSED_LIMIT = 50
+MAX_FORM_BYTES = 2 * 1024 * 1024
+WATCH_SECONDS = 1.0
+PING_SECONDS = 15.0
+
+COLUMNS = [('blocked', 'Blocked'), ('ready', 'Ready'),
+           ('in_progress', 'In progress'), ('closed', 'Closed')]
+
+
+# ============================================================================
+# Config
+# ============================================================================
+
+class ConfigError(Exception):
+    pass
+
+
+@dataclass
+class Project:
+    name: str
+    path: Path
+    color: str
+
+
+@dataclass
+class Config:
+    port: int | None
+    projects: list[Project]
+
+
+def load_config(path: Path) -> Config:
+    try:
+        with open(path, 'rb') as handle:
+            data = tomllib.load(handle)
+    except FileNotFoundError:
+        raise ConfigError(f'config file not found: {path}') from None
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f'cannot read config {path}: {exc}') from None
+
+    port = data.get('port')
+    if port is not None and (not isinstance(port, int) or isinstance(port, bool)
+                             or not 0 <= port <= 65535):
+        raise ConfigError(f'{path}: port must be a number from 0 to 65535, got {port!r}')
+
+    entries = data.get('project')
+    if not isinstance(entries, list) or not entries:
+        raise ConfigError(f'{path}: no [[project]] entry')
+
+    projects = []
+    seen = set()
+    for entry in entries:
+        name = entry.get('name') if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+            raise ConfigError(f'{path}: project name {name!r} must match [A-Za-z0-9_-]+')
+        if name in seen:
+            raise ConfigError(f'{path}: project name {name!r} is used twice')
+        seen.add(name)
+        raw_path = entry.get('path')
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ConfigError(f'{path}: project {name!r} has no path')
+        color = entry.get('color')
+        if color is None:
+            color = f'hsl({zlib.crc32(name.encode()) % 360}, 55%, 45%)'
+        elif not isinstance(color, str) or not re.fullmatch(r'[#A-Za-z0-9(),.% -]+', color):
+            raise ConfigError(f'{path}: project {name!r} has an invalid color {color!r}')
+        projects.append(Project(name, Path(raw_path).expanduser(), color))
+    return Config(port, projects)
+
+
+# ============================================================================
+# Tickets
+# ============================================================================
+
+NOTE_STAMP = re.compile(r'^\*\*(\d{4}-\d{2}-\d{2}T[\d:]+Z)\*\*$', re.MULTILINE)
+KNOWN_STATUSES = {'open', 'in_progress', 'closed', 'done'}
+
+
+@dataclass
+class Ticket:
+    id: str
+    file: str
+    parsed: bool = False
+    status: str = ''
+    type: str = 'task'
+    priority: int = 2
+    assignee: str = ''
+    created: str = ''
+    parent: str = ''
+    deps: list[str] = field(default_factory=list)
+    links: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    title: str = ''
+    description: str = ''
+    design: str = ''
+    acceptance: str = ''
+    others: list[tuple[str, str]] = field(default_factory=list)
+    notes: str = ''
+    last_note: str = ''
+
+
+def yaml_list(value: str) -> list[str]:
+    return [item.strip() for item in value.strip().strip('[]').split(',') if item.strip()]
+
+
+def trim_blank(lines: list[str]) -> str:
+    """Join lines without the leading and trailing blank ones."""
+    start, end = 0, len(lines)
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return '\n'.join(lines[start:end])
+
+
+def split_file(text: str):
+    """Return (front_lines, title_index, chunks) or None when the layout is not a ticket.
+
+    All indexes refer to text.split('\\n'). chunks is a list of (heading, start, end):
+    heading is '' for the description, otherwise the text after '## '; start is the first
+    line of the chunk (the heading line itself for a section), end is exclusive.
+    """
+    lines = text.split('\n')
+    if not lines or lines[0] != '---':
+        return None
+    try:
+        close = lines.index('---', 1)
+    except ValueError:
+        return None
+    title_index = next((i for i in range(close + 1, len(lines)) if lines[i].startswith('# ')), None)
+    if title_index is None:
+        return None
+    starts = [i for i in range(title_index + 1, len(lines)) if lines[i].startswith('## ')]
+    bounds = [title_index + 1] + starts + [len(lines)]
+    chunks = []
+    for n in range(len(bounds) - 1):
+        heading = '' if n == 0 else lines[bounds[n]][3:].strip()
+        chunks.append((heading, bounds[n], bounds[n + 1]))
+    return lines[1:close], title_index, chunks
+
+
+def parse_ticket(text: str, filename: str) -> Ticket:
+    ticket = Ticket(id=filename.removesuffix('.md'), file=filename)
+    parts = split_file(text)
+    if parts is None:
+        return ticket
+    front, title_index, chunks = parts
+    lines = text.split('\n')
+    fields = {}
+    for line in front:
+        key, sep, value = line.partition(':')
+        if sep:
+            fields[key.strip()] = value.strip()
+    # tk finds a ticket by its file name; a file whose id says otherwise (a copied file)
+    # would send tk set to another file, so it is not a ticket here
+    if fields.get('id') != ticket.id:
+        return ticket
+    ticket.parsed = True
+    ticket.status = fields.get('status', '')
+    ticket.type = fields.get('type') or 'task'
+    try:
+        ticket.priority = int(fields.get('priority', '2'))
+    except ValueError:
+        ticket.priority = 2
+    ticket.assignee = fields.get('assignee', '')
+    ticket.created = fields.get('created', '')
+    ticket.parent = fields.get('parent', '')
+    ticket.deps = yaml_list(fields.get('deps', ''))
+    ticket.links = yaml_list(fields.get('links', ''))
+    ticket.tags = yaml_list(fields.get('tags', ''))
+    ticket.title = lines[title_index][2:].strip()
+    seen = set()
+    for heading, start, end in chunks:
+        if heading == '':
+            ticket.description = trim_blank(lines[start:end])
+            continue
+        body = trim_blank(lines[start + 1:end])
+        # the first heading of a kind is the editable one (replace_sections picks it too);
+        # a repeated heading is shown read-only with the other sections
+        if heading == 'Design' and 'Design' not in seen:
+            ticket.design = body
+        elif heading == 'Acceptance Criteria' and heading not in seen:
+            ticket.acceptance = body
+        elif heading == 'Notes' and heading not in seen:
+            ticket.notes = body
+        else:
+            ticket.others.append((heading, body))
+        seen.add(heading)
+    stamps = NOTE_STAMP.findall(ticket.notes)
+    ticket.last_note = stamps[-1] if stamps else ''
+    return ticket
+
+
+def read_exact(path: Path) -> str:
+    """Read a file as UTF-8 without newline translation.
+
+    Path.read_text turns every CR into LF; a save would then rewrite notes it must not touch.
+    A file with CRLF line ends does not parse here, as it does not for the core tk.
+    """
+    with open(path, encoding='utf-8', newline='') as handle:
+        return handle.read()
+
+
+def read_ticket(path: Path) -> Ticket:
+    try:
+        text = read_exact(path)
+    except (UnicodeDecodeError, OSError):
+        return Ticket(id=path.name.removesuffix('.md'), file=path.name)
+    return parse_ticket(text, path.name)
+
+
+def column_of(ticket: Ticket, blocked: set[str]) -> str:
+    if ticket.status in ('closed', 'done'):
+        return 'closed'
+    if ticket.status == 'in_progress':
+        return 'in_progress'
+    return 'blocked' if ticket.id in blocked else 'ready'
+
+
+# ============================================================================
+# Editing
+# ============================================================================
+
+EDIT_FIELDS = ('title', 'description', 'design', 'acceptance')
+FIELD_LABELS = {'title': 'Title', 'description': 'Description', 'design': 'Design',
+                'acceptance': 'Acceptance Criteria'}
+SECTION_HEADINGS = {'design': 'Design', 'acceptance': 'Acceptance Criteria'}
+
+
+def normal_text(value: str) -> str:
+    """Normal form of an editable text: LF line ends, no leading or trailing blank lines."""
+    return trim_blank(value.replace('\r\n', '\n').replace('\r', '\n').split('\n'))
+
+
+def normal_title(value: str) -> str:
+    return value.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def edit_hash(title: str, description: str, design: str, acceptance: str) -> str:
+    values = [normal_title(title), normal_text(description), normal_text(design), normal_text(acceptance)]
+    return hashlib.sha256('\0'.join(values).encode('utf-8')).hexdigest()
+
+
+def edit_values(ticket: Ticket) -> dict[str, str]:
+    return {'title': ticket.title, 'description': ticket.description,
+            'design': ticket.design, 'acceptance': ticket.acceptance}
+
+
+def validate_edit(values: dict[str, str], changed: list[str]) -> list[str]:
+    """Check the changed fields only: an untouched field is never a reason to refuse a save."""
+    errors = []
+    for name in changed:
+        value = values[name]
+        if name == 'title':
+            if not value:
+                errors.append('title must not be empty')
+            elif '\n' in value:
+                errors.append('title must be one line')
+            continue
+        for line in value.split('\n'):
+            if line == '---':
+                errors.append(f'{FIELD_LABELS[name]}: a line "---" is not allowed '
+                              '(tk reads it as a front matter marker)')
+                break
+            if line.startswith('## '):
+                errors.append(f'{FIELD_LABELS[name]}: a line that starts with "## " is not allowed '
+                              '(it would start a new section)')
+                break
+    return errors
+
+
+def replace_sections(text: str, description: str | None, design: str | None,
+                     acceptance: str | None) -> str:
+    """Replace the given sections of a ticket file; None leaves a section as it is.
+
+    Works on lines and copies everything else without change: front matter, title line,
+    notes and unknown sections stay byte for byte.
+    """
+    parts = split_file(text)
+    if parts is None:
+        raise ValueError('not a ticket file')
+    _, title_index, bounds = parts
+    lines = text.split('\n')
+    head = lines[:title_index + 1]
+    chunks = [[heading, lines[start:end], False] for heading, start, end in bounds]
+
+    if description is not None:
+        chunks[0][1] = ['', *description.split('\n'), ''] if description else ['']
+        chunks[0][2] = True
+
+    def set_section(heading: str, value: str | None, after: list[str]):
+        if value is None:
+            return
+        index = next((i for i, chunk in enumerate(chunks) if chunk[0] == heading), None)
+        if value == '':
+            if index is not None:
+                del chunks[index]
+                chunks[index - 1][2] = True
+            return
+        body = [f'## {heading}', '', *value.split('\n'), '']
+        if index is not None:
+            chunks[index][1], chunks[index][2] = body, True
+            return
+        position = 1
+        for i, chunk in enumerate(chunks):
+            if chunk[0] in after:
+                position = i + 1
+        previous = chunks[position - 1][1]
+        if previous and previous[-1].strip():
+            previous.append('')
+        chunks.insert(position, [heading, body, True])
+
+    set_section('Design', design, [])
+    set_section('Acceptance Criteria', acceptance, ['Design'])
+
+    out = list(head)
+    for _, chunk_lines, _ in chunks:
+        out += chunk_lines
+    if chunks[-1][2]:               # the last chunk was rewritten: end with exactly one line break
+        while out and not out[-1].strip():
+            out.pop()
+        out.append('')
+    return '\n'.join(out)
+
+
+def write_ticket_file(path: Path, text: str) -> None:
+    """Replace the file in one step. The temp name must not end in .md: tk reads every *.md."""
+    temp = path.with_name(f'.{path.name}.tmp')
+    try:
+        with open(temp, 'w', encoding='utf-8', newline='') as handle:
+            handle.write(text)
+        shutil.copymode(path, temp)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+# ============================================================================
+# Snapshots
+# ============================================================================
+
+MISSING_STAMP = frozenset({('<missing>', 0, 0)})
+
+
+@dataclass
+class Snapshot:
+    tickets: dict[str, Ticket]
+    blocked: set[str]
+    error: str
+    stamp: frozenset
+
+
+def tickets_dir(project: Project) -> Path:
+    return project.path / '.tickets'
+
+
+def run_tk(project: Project, *args: str) -> subprocess.CompletedProcess:
+    """Run tk for one project. Never through a shell; TICKETS_DIR is set explicitly."""
+    program = os.environ.get('TK_SCRIPT') or 'tk'
+    env = dict(os.environ, TICKETS_DIR=str(tickets_dir(project)))
+    try:
+        return subprocess.run([program, *args], cwd=project.path, env=env, text=True,
+                              capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess([program, *args], 127, '', str(exc))
+
+
+def dir_stamp(project: Project) -> frozenset:
+    try:
+        entries = []
+        with os.scandir(tickets_dir(project)) as scan:
+            for entry in scan:
+                if entry.name.endswith('.md') and not entry.name.startswith('.'):
+                    info = entry.stat()
+                    entries.append((entry.name, info.st_mtime_ns, info.st_size))
+        return frozenset(entries)
+    except OSError:
+        return MISSING_STAMP
+
+
+def build_snapshot(project: Project, stamp: frozenset) -> Snapshot:
+    if stamp == MISSING_STAMP:
+        return Snapshot({}, set(), f'{tickets_dir(project)} not found', stamp)
+    tickets = {}
+    for name in sorted(entry[0] for entry in stamp):
+        ticket = read_ticket(tickets_dir(project) / name)
+        key = ticket.id if ticket.parsed else f'{name}#file'
+        tickets[key] = ticket
+    blocked, error = set(), ''
+    if stamp:       # tk blocked exits 2 with empty stderr on a directory without tickets
+        result = run_tk(project, 'blocked')
+        if result.returncode != 0:
+            error = f'tk blocked failed (exit {result.returncode}): {result.stderr.strip()}'
+        else:
+            blocked = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
+    return Snapshot(tickets, blocked, error, stamp)
+
+
+class Store:
+    """One snapshot per project, rebuilt when the files on disk differ from its stamp."""
+
+    def __init__(self, projects: list[Project]):
+        self.projects = {p.name: p for p in projects}
+        self.snapshots: dict[str, Snapshot] = {}
+        self.read_locks = {p.name: threading.Lock() for p in projects}
+        self.write_locks = {p.name: threading.Lock() for p in projects}
+        self.changed = threading.Condition()
+        self.version = 0
+        self.last_changed = ''
+
+    def refresh(self, name: str) -> bool:
+        """Rebuild the snapshot when the files differ from its stamp. True when rebuilt.
+
+        Requests and the watcher both call this. A rebuild of an existing snapshot is a
+        change on disk and wakes the event streams; the first build is not.
+        """
+        project = self.projects[name]
+        with self.read_locks[name]:
+            stamp = dir_stamp(project)
+            current = self.snapshots.get(name)
+            if current is not None and current.stamp == stamp:
+                return False
+            self.snapshots[name] = build_snapshot(project, stamp)
+        if current is not None:
+            with self.changed:
+                self.version += 1
+                self.last_changed = name
+                self.changed.notify_all()
+        return True
+
+    def wait_change(self, seen: int, timeout: float) -> int:
+        """Block until the version differs from seen or the timeout passes; return the version."""
+        with self.changed:
+            if self.version == seen:
+                self.changed.wait(timeout)
+            return self.version
+
+    def watch(self) -> None:
+        while True:
+            for name in self.projects:
+                try:
+                    self.refresh(name)
+                except Exception:       # a broken project must not stop the watcher
+                    pass
+            time.sleep(WATCH_SECONDS)
+
+    def get(self, name: str) -> Snapshot:
+        self.refresh(name)
+        return self.snapshots[name]
+
+    def lock(self, name: str) -> threading.Lock:
+        return self.write_locks[name]
+
+
+# ============================================================================
+# HTML
+# ============================================================================
+
+def esc(value) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def ticket_url(project: Project, ticket_id: str) -> str:
+    """Path of a ticket page. The id is percent-encoded: ids can hold any character."""
+    return f'/p/{project.name}/{quote(ticket_id, safe="")}'
+
+
+CSS = """
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1c1e21; --muted: #6b7280; --line: #d9dce1;
+  --accent: #2563eb; --warn: #b45309; --bad: #b91c1c; --col: #eceef1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --panel: #22252a; --text: #e6e8eb; --muted: #9aa1ab; --line: #343941;
+    --accent: #7aa7ff; --warn: #f0b35a; --bad: #ff8a8a; --col: #1b1e22;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { display: flex; gap: 1rem; align-items: center; padding: .5rem 1rem;
+         background: var(--panel); border-bottom: 1px solid var(--line);
+         position: sticky; top: 0; z-index: 1; }
+header nav { display: flex; gap: .9rem; flex-wrap: wrap; flex: 1; }
+#q { width: 16rem; max-width: 40vw; padding: .3rem .5rem; border: 1px solid var(--line);
+     border-radius: 4px; background: var(--bg); color: var(--text); font: inherit; }
+main { padding: 1rem; }
+.lane, .flat { display: grid; gap: .5rem; align-items: start; }
+.lane { grid-template-columns: 8rem repeat(4, minmax(0, 1fr)); padding: .75rem 0;
+        border-bottom: 1px solid var(--line); }
+.flat { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.lane-head { grid-row: 1 / span 2; border-left: 4px solid var(--pc, var(--line)); padding-left: .5rem; }
+.lane-head a { display: block; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.count { color: var(--muted); font-size: 12px; }
+.lane-error { grid-column: 2 / -1; color: var(--bad); white-space: pre-wrap; }
+.flat + .lane-error, main > .lane-error { margin-bottom: .5rem; }
+.col { background: var(--col); border-radius: 6px; padding: .4rem; min-height: 2.5rem; }
+.col h2 { margin: 0 0 .4rem; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+          text-transform: uppercase; color: var(--muted); }
+.col h2 .n { font-weight: 400; }
+.card { display: block; margin-bottom: .4rem; padding: .35rem .5rem; background: var(--panel);
+        border: 1px solid var(--line); border-left: 4px solid var(--pc, var(--line));
+        border-radius: 4px; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.card[hidden] { display: none; }
+.card:hover { text-decoration: none; border-color: var(--accent); }
+.card .title { display: block; margin: .15rem 0; }
+.card .id { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.pri, .type, .status, .proj, .tag { font-size: 11px; padding: 0 .3rem; border-radius: 3px;
+        border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.pri.p0, .pri.p1 { color: var(--bad); border-color: var(--bad); }
+.proj { color: var(--text); border-color: var(--pc, var(--line)); }
+.status { color: var(--warn); border-color: var(--warn); }
+.tags { display: inline-flex; gap: .2rem; flex-wrap: wrap; }
+.blockers, .parent { display: block; font-size: 12px; color: var(--muted); }
+.blockers { color: var(--warn); }
+.card.is-blocked { border-color: var(--warn); border-left-color: var(--pc, var(--warn)); }
+.card.unparsable { color: var(--bad); border-left-color: var(--bad); }
+.more { display: block; font-size: 12px; padding: .1rem .3rem; }
+.ticket { max-width: 60rem; background: var(--panel); border: 1px solid var(--line);
+          border-left: 4px solid var(--pc, var(--line)); border-radius: 6px; padding: 1rem 1.25rem; }
+.ticket h1 { margin: .2rem 0 .6rem; font-size: 20px; }
+.ticket h3 { margin: 1rem 0 .3rem; font-size: 12px; text-transform: uppercase;
+             letter-spacing: .04em; color: var(--muted); }
+.crumb { margin: 0; color: var(--muted); }
+.meta { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; margin: .5rem 0; }
+.meta dt { color: var(--muted); }
+.meta dd { margin: 0; }
+.rel ul { margin: 0; padding-left: 1.1rem; }
+pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+pre[data-section="notes"] { color: var(--muted); }
+form label { display: block; margin: .9rem 0 .25rem; font-size: 12px; text-transform: uppercase;
+             letter-spacing: .04em; color: var(--muted); }
+form input[type=text], form textarea { width: 100%; padding: .4rem .5rem; font: inherit;
+        color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+form textarea { font-family: ui-monospace, monospace; font-size: 13px; resize: vertical; }
+button { font: inherit; padding: .35rem .9rem; border-radius: 4px; border: 1px solid var(--accent);
+         background: var(--accent); color: #fff; cursor: pointer; }
+.msg { color: var(--bad); font-weight: 600; }
+.disk-label { margin: .3rem 0 .1rem; font-size: 12px; color: var(--warn); }
+pre.disk { padding: .4rem .5rem; border: 1px dashed var(--warn); border-radius: 4px;
+           font-family: ui-monospace, monospace; font-size: 13px; }
+@media (max-width: 900px) {
+  .lane { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lane-head, .lane-error { grid-column: 1 / -1; grid-row: auto; }
+  .flat { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+"""
+
+# Search filter and auto-refresh. Not included on the edit form: a refresh would drop typed text.
+JS = """
+(function () {
+  var q = document.getElementById('q');
+  function applyFilter() {
+    var needle = q.value.trim().toLowerCase();
+    document.querySelectorAll('.card').forEach(function (card) {
+      var hay = card.getAttribute('data-search') || card.textContent.toLowerCase();
+      card.hidden = needle !== '' && hay.indexOf(needle) === -1;
+    });
+  }
+  try { q.value = sessionStorage.getItem('tkweb.q') || ''; } catch (e) {}
+  q.addEventListener('input', function () {
+    try { sessionStorage.setItem('tkweb.q', q.value); } catch (e) {}
+    applyFilter();
+  });
+  applyFilter();
+
+  var busy = false, again = false;
+  function refresh() {
+    if (busy) { again = true; return; }
+    busy = true;
+    fetch(location.href)
+      .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function (text) {
+        var fresh = new DOMParser().parseFromString(text, 'text/html').querySelector('main');
+        if (fresh) {
+          document.querySelector('main').innerHTML = fresh.innerHTML;
+          applyFilter();
+        }
+      })
+      .catch(function () {})
+      .then(function () {
+        busy = false;
+        if (again) { again = false; refresh(); }
+      });
+  }
+  new EventSource('/events').onmessage = refresh;
+})();
+"""
+
+
+def page(app, title: str, main_html: str, script: bool = True) -> str:
+    nav = ['<a href="/">Lanes</a>', '<a href="/?flat=1">Flat</a>']
+    nav += [f'<a href="/p/{esc(p.name)}">{esc(p.name)}</a>' for p in app.config.projects]
+    return (
+        '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f'<title>{esc(title)} - tk web</title>\n'
+        f'<style>{CSS}</style>\n'
+        '</head>\n<body>\n'
+        f'<header><nav>{" ".join(nav)}</nav>'
+        + ('<input id="q" type="search" placeholder="Search" autocomplete="off">' if script else '') +
+        '</header>\n'
+        f'<main>\n{main_html}\n</main>\n'
+        + (f'<script>{JS}</script>\n' if script else '') +
+        '</body>\n</html>\n'
+    )
+
+
+def sorted_columns(snapshot: Snapshot) -> dict[str, list[Ticket]]:
+    """Tickets of one project per column, in display order."""
+    columns = {key: [] for key, _ in COLUMNS}
+    for ticket in snapshot.tickets.values():
+        if ticket.parsed:
+            columns[column_of(ticket, snapshot.blocked)].append(ticket)
+    for key in ('blocked', 'ready', 'in_progress'):
+        columns[key].sort(key=lambda t: (t.priority, t.id))
+    columns['closed'].sort(key=lambda t: t.id)
+    columns['closed'].sort(key=lambda t: t.last_note or t.created, reverse=True)
+    return columns
+
+
+def open_blockers(ticket: Ticket, snapshot: Snapshot) -> list[str]:
+    result = []
+    for dep in ticket.deps:
+        other = snapshot.tickets.get(dep)
+        if other is None or column_of(other, snapshot.blocked) != 'closed':
+            result.append(dep)
+    return result
+
+
+def render_card(project: Project, ticket: Ticket, snapshot: Snapshot, show_project: bool) -> str:
+    classes = 'card'
+    if ticket.status == 'in_progress' and ticket.id in snapshot.blocked:
+        classes += ' is-blocked'
+    search = ' '.join([project.name, ticket.id, ticket.title, *ticket.tags]).lower()
+    parts = [f'<span class="id">{esc(ticket.id)}</span>',
+             f'<span class="pri p{ticket.priority}">P{ticket.priority}</span>',
+             f'<span class="type">{esc(ticket.type)}</span>']
+    if ticket.status not in KNOWN_STATUSES:
+        parts.append(f'<span class="status">{esc(ticket.status or "no status")}</span>')
+    if show_project:
+        parts.append(f'<span class="proj">{esc(project.name)}</span>')
+    parts.append(f'<span class="title">{esc(ticket.title)}</span>')
+    if ticket.tags:
+        tags = ''.join(f'<span class="tag">{esc(tag)}</span>' for tag in ticket.tags)
+        parts.append(f'<span class="tags">{tags}</span>')
+    blockers = open_blockers(ticket, snapshot)
+    if blockers:
+        parts.append(f'<span class="blockers" title="open blockers">&#9940; {esc(" ".join(blockers))}</span>')
+    if ticket.parent:
+        parts.append(f'<span class="parent" title="parent">&#8593; {esc(ticket.parent)}</span>')
+    return (f'<a class="{classes}" data-project="{esc(project.name)}" data-id="{esc(ticket.id)}" '
+            f'data-search="{esc(search)}" href="{esc(ticket_url(project, ticket.id))}" '
+            f'style="--pc: {esc(project.color)}">{" ".join(parts)}</a>')
+
+
+def render_unparsable(snapshot: Snapshot) -> str:
+    return ''.join(f'<div class="card unparsable">{esc(t.file)} unparsable</div>'
+                   for t in snapshot.tickets.values() if not t.parsed)
+
+
+def render_column(key: str, title: str, cards_html: str, count: int) -> str:
+    return (f'<section class="col" data-col="{key}"><h2>{title} <span class="n">{count}</span></h2>'
+            f'{cards_html}</section>')
+
+
+def render_lane(app, project: Project, closed_limit: int | None, more_href: str) -> str:
+    snapshot = app.store.get(project.name)
+    columns = sorted_columns(snapshot)
+    open_count = sum(len(columns[key]) for key in ('blocked', 'ready', 'in_progress'))
+    out = [f'<div class="lane" data-project="{esc(project.name)}" style="--pc: {esc(project.color)}">',
+           f'<div class="lane-head"><a href="/p/{esc(project.name)}">{esc(project.name)}</a>'
+           f'<span class="count">{open_count} open</span></div>']
+    if snapshot.error:
+        out.append(f'<div class="lane-error">{esc(snapshot.error)}</div>')
+    for key, title in COLUMNS:
+        tickets = columns[key]
+        shown = tickets
+        if key == 'closed' and closed_limit is not None:
+            shown = tickets[:closed_limit]
+        cards = ''.join(render_card(project, t, snapshot, False) for t in shown)
+        if key == 'ready':
+            cards += render_unparsable(snapshot)
+        if len(shown) < len(tickets):
+            cards += f'<a class="more" href="{esc(more_href)}">{len(tickets) - len(shown)} more</a>'
+        out.append(render_column(key, title, cards, len(tickets)))
+    out.append('</div>')
+    return '\n'.join(out)
+
+
+def render_board(app) -> str:
+    return '\n'.join(render_lane(app, p, BOARD_CLOSED_LIMIT, f'/p/{p.name}')
+                     for p in app.config.projects)
+
+
+def render_flat(app) -> str:
+    merged = {key: [] for key, _ in COLUMNS}
+    totals = {key: 0 for key, _ in COLUMNS}
+    extra = {key: '' for key, _ in COLUMNS}
+    errors = []
+    for project in app.config.projects:
+        snapshot = app.store.get(project.name)
+        if snapshot.error:
+            errors.append(f'<div class="lane-error">{esc(project.name)}: {esc(snapshot.error)}</div>')
+        columns = sorted_columns(snapshot)
+        for key, _ in COLUMNS:
+            tickets = columns[key]
+            totals[key] += len(tickets)
+            shown = tickets[:BOARD_CLOSED_LIMIT] if key == 'closed' else tickets
+            merged[key] += [(project, snapshot, t) for t in shown]
+            if len(shown) < len(tickets):
+                extra[key] += (f'<a class="more" href="/p/{esc(project.name)}">'
+                               f'{esc(project.name)}: {len(tickets) - len(shown)} more</a>')
+        extra['ready'] += render_unparsable(snapshot)
+    for key in ('blocked', 'ready', 'in_progress'):
+        merged[key].sort(key=lambda item: (item[2].priority, item[2].id))
+    merged['closed'].sort(key=lambda item: item[2].id)
+    merged['closed'].sort(key=lambda item: item[2].last_note or item[2].created, reverse=True)
+    out = errors + ['<div class="flat">']
+    for key, title in COLUMNS:
+        cards = ''.join(render_card(project, t, snapshot, True) for project, snapshot, t in merged[key])
+        out.append(render_column(key, title, cards + extra[key], totals[key]))
+    out.append('</div>')
+    return '\n'.join(out)
+
+
+def render_relation(project: Project, snapshot: Snapshot, rel: str, title: str, ids: list[str]) -> str:
+    if not ids:
+        return ''
+    items = []
+    for ticket_id in ids:
+        other = snapshot.tickets.get(ticket_id)
+        if other is None or not other.parsed:
+            items.append(f'<li data-id="{esc(ticket_id)}">{esc(ticket_id)} '
+                         '<span class="status">missing</span></li>')
+        else:
+            items.append(f'<li data-id="{esc(ticket_id)}">'
+                         f'<a href="{esc(ticket_url(project, ticket_id))}">{esc(ticket_id)}</a> '
+                         f'{esc(other.title)} <span class="status">{esc(other.status)}</span></li>')
+    return f'<div class="rel"><h3>{title}</h3><ul data-rel="{rel}">{"".join(items)}</ul></div>'
+
+
+def render_text(section: str, title: str, text: str) -> str:
+    if not text:
+        return ''
+    heading = f'<h3>{esc(title)}</h3>' if title else ''
+    return f'{heading}<pre data-section="{section}">{esc(text)}</pre>'
+
+
+def render_ticket(app, project: Project, snapshot: Snapshot, ticket: Ticket) -> str:
+    parsed = sorted((t for t in snapshot.tickets.values() if t.parsed), key=lambda t: t.id)
+    children = [t.id for t in parsed if t.parent == ticket.id]
+    dependents = [t.id for t in parsed if ticket.id in t.deps]
+    base = esc(ticket_url(project, ticket.id))
+    meta = [('Status', ticket.status), ('Type', ticket.type), ('Priority', f'P{ticket.priority}'),
+            ('Assignee', ticket.assignee), ('Tags', ', '.join(ticket.tags)), ('Created', ticket.created)]
+    meta_html = ''.join(f'<dt>{esc(key)}</dt><dd>{esc(value)}</dd>' for key, value in meta if value)
+    out = [
+        f'<article class="ticket" style="--pc: {esc(project.color)}">',
+        f'<p class="crumb"><a href="/p/{esc(project.name)}">{esc(project.name)}</a> / {esc(ticket.id)}</p>',
+        f'<h1>{esc(ticket.title)}</h1>',
+        f'<p><a class="edit" href="{base}/edit">Edit</a></p>',
+        f'<dl class="meta">{meta_html}</dl>',
+        render_relation(project, snapshot, 'parent', 'Parent', [ticket.parent] if ticket.parent else []),
+        render_relation(project, snapshot, 'children', 'Children', children),
+        render_relation(project, snapshot, 'deps', 'Depends on', ticket.deps),
+        render_relation(project, snapshot, 'dependents', 'Blocks', dependents),
+        render_relation(project, snapshot, 'links', 'Links', ticket.links),
+        render_text('description', '', ticket.description),
+        render_text('design', 'Design', ticket.design),
+        render_text('acceptance', 'Acceptance Criteria', ticket.acceptance),
+    ]
+    out += [render_text('other', heading, text) for heading, text in ticket.others]
+    out.append(render_text('notes', 'Notes', ticket.notes))
+    out.append('</article>')
+    return '\n'.join(part for part in out if part)
+
+
+def render_form(project: Project, ticket_id: str, values: dict[str, str], base: str,
+                messages: list[str] | None = None, disk: dict[str, str] | None = None) -> str:
+    """The edit form. disk holds the on-disk text of the fields to show next to the submitted text."""
+    base_url = esc(ticket_url(project, ticket_id))
+    out = [f'<article class="ticket" style="--pc: {esc(project.color)}">',
+           f'<p class="crumb"><a href="/p/{esc(project.name)}">{esc(project.name)}</a> / '
+           f'<a href="{base_url}">{esc(ticket_id)}</a> / edit</p>']
+    out += [f'<p class="msg">{esc(message)}</p>' for message in messages or []]
+    out.append(f'<form method="post" action="{base_url}/edit">')
+    out.append(f'<input type="hidden" name="base" value="{esc(base)}">')
+    for name in EDIT_FIELDS:
+        out.append(f'<label for="f-{name}">{esc(FIELD_LABELS[name])}</label>')
+        if name == 'title':
+            out.append(f'<input id="f-title" type="text" name="title" value="{esc(values[name])}">')
+        else:
+            rows = max(4, min(30, values[name].count('\n') + 3))
+            # HTML drops one line break right after <textarea>, so emit one of our own first
+            out.append(f'<textarea id="f-{name}" name="{name}" rows="{rows}">\n{esc(values[name])}</textarea>')
+        if disk and name in disk:
+            out.append(f'<p class="disk-label">On disk now:</p>'
+                       f'<pre class="disk" data-field="{name}">{esc(disk[name])}</pre>')
+    out.append(f'<p><button type="submit">Save</button> <a href="{base_url}">Cancel</a></p>')
+    out.append('</form></article>')
+    return '\n'.join(out)
+
+
+def render_project(app, project: Project, show_all: bool) -> str:
+    limit = None if show_all else PROJECT_CLOSED_LIMIT
+    return render_lane(app, project, limit, f'/p/{project.name}?closed=all')
+
+
+# ============================================================================
+# HTTP
+# ============================================================================
+
+class App:
+    def __init__(self, config: Config):
+        self.config = config
+        self.store = Store(config.projects)
+        self.port = 0
+
+    def project(self, name: str) -> Project | None:
+        for project in self.config.projects:
+            if project.name == name:
+                return project
+        return None
+
+    def ticket(self, name: str, ticket_id: str):
+        """Return (project, snapshot, ticket) for a parsed ticket, else None.
+
+        The id is only ever used as a dictionary key, never as part of a file path.
+        """
+        project = self.project(name)
+        if project is None:
+            return None
+        snapshot = self.store.get(name)
+        ticket = snapshot.tickets.get(ticket_id)
+        if ticket is None or not ticket.parsed:
+            return None
+        return project, snapshot, ticket
+
+
+class Handler(BaseHTTPRequestHandler):
+    app: App = None
+    server_version = 'tk-web'
+
+    def log_message(self, format, *args):
+        pass
+
+    def send_html(self, status: int, body: str, headers: dict | None = None):
+        data = body.encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def send_error_page(self, status: int, message: str):
+        self.send_html(status, page(self.app, str(status), f'<p class="msg">{esc(message)}</p>'))
+
+    def host_allowed(self) -> bool:
+        allowed = {f'127.0.0.1:{self.app.port}', f'localhost:{self.app.port}'}
+        return self.headers.get('Host', '') in allowed
+
+    def origin_allowed(self) -> bool:
+        origin = self.headers.get('Origin')
+        allowed = {f'http://127.0.0.1:{self.app.port}', f'http://localhost:{self.app.port}'}
+        return origin is None or origin in allowed
+
+    def read_form(self) -> dict[str, str] | None:
+        try:
+            length = int(self.headers.get('Content-Length', ''))
+        except ValueError:
+            return None
+        if not 0 <= length <= MAX_FORM_BYTES:
+            return None
+        try:
+            fields = parse_qs(self.rfile.read(length).decode('utf-8'), keep_blank_values=True)
+        except UnicodeDecodeError:
+            return None
+        return {key: values[0] for key, values in fields.items()}
+
+    def events(self):
+        """Server-sent events: one message with the project name per change on disk."""
+        store = self.app.store
+        seen = store.version
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        try:
+            self.wfile.write(b': ok\n\n')
+            self.wfile.flush()
+            while True:
+                version = store.wait_change(seen, PING_SECONDS)
+                if version != seen:
+                    seen = version
+                    self.wfile.write(f'data: {store.last_changed}\n\n'.encode('utf-8'))
+                else:
+                    self.wfile.write(b': ping\n\n')
+                self.wfile.flush()
+        except OSError:         # the client went away
+            pass
+
+    def edit_get(self, project: Project, ticket: Ticket):
+        values = edit_values(ticket)
+        body = render_form(project, ticket.id, values, edit_hash(**values))
+        self.send_html(200, page(self.app, f'Edit {ticket.id}', body, script=False))
+
+    def edit_post(self, project: Project, ticket: Ticket):
+        app = self.app
+        form = self.read_form()
+        if form is None:
+            self.send_error_page(400, 'Bad form data')
+            return
+        # a browser always sends every field; a missing one must not read as "emptied"
+        if any(name not in form for name in (*EDIT_FIELDS, 'base')):
+            self.send_error_page(400, 'Bad form data: a field is missing')
+            return
+        submitted = {'title': normal_title(form['title'])}
+        for name in ('description', 'design', 'acceptance'):
+            submitted[name] = normal_text(form[name])
+
+        def form_page(status: int, messages: list[str], base: str, disk: dict | None = None):
+            body = render_form(project, ticket.id, submitted, base, messages, disk)
+            self.send_html(status, page(app, f'Edit {ticket.id}', body, script=False))
+
+        with app.store.lock(project.name):
+            # the file name comes from the snapshot, never from the URL
+            path = tickets_dir(project) / ticket.file
+            try:
+                current = parse_ticket(read_exact(path), ticket.file)
+            except (OSError, UnicodeDecodeError):
+                current = None
+            if current is None or not current.parsed or current.id != ticket.id:
+                self.send_error_page(404, 'The ticket file is gone')
+                return
+            on_disk = edit_values(current)
+            disk_hash = edit_hash(**on_disk)
+            on_disk = {name: normal_title(value) if name == 'title' else normal_text(value)
+                       for name, value in on_disk.items()}
+            if disk_hash != form['base']:
+                differing = {name: on_disk[name] for name in EDIT_FIELDS if on_disk[name] != submitted[name]}
+                form_page(409, ['the ticket changed on disk - compare and save again'], disk_hash, differing)
+                return
+            changed = [name for name in EDIT_FIELDS if submitted[name] != on_disk[name]]
+            errors = validate_edit(submitted, changed)
+            if errors:
+                form_page(400, errors, disk_hash)
+                return
+            if 'title' in changed:
+                result = run_tk(project, 'set', ticket.id, 'title', '--', submitted['title'])
+                if result.returncode != 0:
+                    form_page(400, [f'tk set failed: {(result.stderr or result.stdout).strip()}'], disk_hash)
+                    return
+            if any(name in changed for name in ('description', 'design', 'acceptance')):
+                try:
+                    text = read_exact(path)     # tk set may have rewritten the file
+                    write_ticket_file(path, replace_sections(text, *(
+                        submitted[name] if name in changed else None
+                        for name in ('description', 'design', 'acceptance'))))
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    form_page(500, [f'cannot write the ticket: {exc}'], disk_hash)
+                    return
+            app.store.refresh(project.name)
+        self.send_response(303)
+        self.send_header('Location', ticket_url(project, ticket.id))
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def dispatch(self, method: str):
+        try:
+            if not self.host_allowed():
+                self.send_error_page(403, 'Forbidden: unexpected Host header')
+                return
+            if method == 'POST' and not self.origin_allowed():
+                self.send_error_page(403, 'Forbidden: unexpected Origin header')
+                return
+            url = urlsplit(self.path)
+            query = parse_qs(url.query, keep_blank_values=True)
+            self.route(method, url.path, query)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:    # keep the server alive, show the cause
+            try:
+                self.send_error_page(500, f'{type(exc).__name__}: {exc}')
+            except OSError:
+                pass
+
+    def route(self, method: str, path: str, query: dict):
+        app = self.app
+        if method == 'GET' and path == '/':
+            flat = query.get('flat', [''])[0] not in ('', '0')
+            self.send_html(200, page(app, 'Board', render_flat(app) if flat else render_board(app)))
+            return
+        if method == 'GET' and path == '/events':
+            self.events()
+            return
+        match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)', path)
+        project = app.project(match.group(1)) if match else None
+        if method == 'GET' and project is not None:
+            show_all = query.get('closed', [''])[0] == 'all'
+            self.send_html(200, page(app, project.name, render_project(app, project, show_all)))
+            return
+        match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)/([^/]+)/edit', path)
+        found = app.ticket(match.group(1), unquote(match.group(2))) if match else None
+        if found is not None:
+            project, _, ticket = found
+            if method == 'GET':
+                self.edit_get(project, ticket)
+            else:
+                self.edit_post(project, ticket)
+            return
+        match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)/([^/]+)', path)
+        found = app.ticket(match.group(1), unquote(match.group(2))) if match else None
+        if method == 'GET' and found is not None:
+            project, snapshot, ticket = found
+            self.send_html(200, page(app, f'{ticket.id} {ticket.title}',
+                                     render_ticket(app, project, snapshot, ticket)))
+            return
+        self.send_error_page(404, 'Not found')
+
+    def do_GET(self):
+        self.dispatch('GET')
+
+    def do_POST(self):
+        self.dispatch('POST')
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog='tk web',
+        description='Local kanban board over the tk projects listed in a config file.')
+    parser.add_argument('--port', type=int, help=f'port to listen on (default {DEFAULT_PORT}; 0 = any free port)')
+    parser.add_argument('--config', help=f'config file (default $TK_WEB_CONFIG, else {DEFAULT_CONFIG})')
+    args = parser.parse_args(argv)
+
+    config_path = Path(args.config or os.environ.get('TK_WEB_CONFIG') or DEFAULT_CONFIG).expanduser()
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        print(f'tk web: {exc}', file=sys.stderr)
+        print(f'\nExample config ({config_path}):\n\n{EXAMPLE_CONFIG}', file=sys.stderr)
+        return 1
+
+    port = args.port if args.port is not None else config.port if config.port is not None else DEFAULT_PORT
+    app = App(config)
+    Handler.app = app
+    try:
+        server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    except (OSError, OverflowError) as exc:
+        print(f'tk web: cannot listen on 127.0.0.1:{port}: {exc}', file=sys.stderr)
+        return 1
+    server.daemon_threads = True
+    app.port = server.server_address[1]
+
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+
+    for project in config.projects:     # first build before serving: every later change is an event
+        app.store.refresh(project.name)
+    threading.Thread(target=app.store.watch, daemon=True).start()
+    print(f'tk web: http://127.0.0.1:{app.port}/', flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

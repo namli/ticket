@@ -1,0 +1,980 @@
+Feature: Web board
+  As the owner of several tk projects
+  I want one local page with the tickets of all of them
+  So that I see what is ready and what is blocked
+
+  # --- Plugin, config, command line ---
+
+  Scenario: tk help lists the plugin
+    When I run "ticket help"
+    Then the output should contain "web"
+    And the output should contain "Local kanban board over several tk projects"
+
+  Scenario: A missing config stops the server
+    When I run "ticket web --config /nonexistent/web.toml"
+    Then the exit code should be 1
+    And the output should contain "/nonexistent/web.toml"
+    And the output should contain "[[project]]"
+
+  Scenario: A duplicate project name is a config error
+    Given a web config:
+      """
+      [[project]]
+      name = "same"
+      path = "{dir}"
+
+      [[project]]
+      name = "same"
+      path = "{dir}"
+      """
+    When I run "ticket web --config web.toml"
+    Then the exit code should be 1
+    And the output should contain "same"
+    And the output should contain "web.toml"
+
+  Scenario: A project name with a slash is a config error
+    Given a web config:
+      """
+      [[project]]
+      name = "a/b"
+      path = "{dir}"
+      """
+    When I run "ticket web --config web.toml"
+    Then the exit code should be 1
+    And the output should contain "a/b"
+
+  Scenario: A config without projects is a config error
+    Given a web config:
+      """
+      port = 7420
+      """
+    When I run "ticket web --config web.toml"
+    Then the exit code should be 1
+    And the output should contain "[[project]]"
+
+  Scenario: The server lists the configured projects
+    Given a web project "alpha"
+    And a web project "beta"
+    And the web server is running
+    When I GET "/"
+    Then the response status should be 200
+    And the response header "Content-Type" should be "text/html; charset=utf-8"
+    And the response should contain "data-project=\"alpha\""
+    And the response should contain "data-project=\"beta\""
+
+  Scenario: The config path comes from TK_WEB_CONFIG
+    Given a web project "alpha"
+    And the web server is running with the config in TK_WEB_CONFIG
+    When I GET "/"
+    Then the response status should be 200
+
+  Scenario: A foreign Host header is rejected
+    Given a web project "alpha"
+    And the web server is running
+    When I GET "/" with header "Host: evil.example"
+    Then the response status should be 403
+
+  Scenario: The localhost Host header is accepted
+    Given a web project "alpha"
+    And the web server is running
+    When I GET "/" with header "Host: localhost:<port>"
+    Then the response status should be 200
+
+  Scenario: An unknown path is not found
+    Given a web project "alpha"
+    And the web server is running
+    When I GET "/nope"
+    Then the response status should be 404
+
+  Scenario: A busy port stops the second server
+    Given a web project "alpha"
+    And the web server is running
+    When I start a second web server on the same port
+    Then the exit code should be 1
+    And the output should contain "cannot listen"
+
+  # --- Board pages ---
+
+  Scenario: Tickets sit in the column of their state
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then the response status should be 200
+    And project "alpha" column "blocked" should list "a-0003"
+    And project "alpha" column "ready" should list "a-0002, a-0001"
+    And project "alpha" column "in_progress" should list "a-0004, a-0005"
+    And project "alpha" column "closed" should list "a-0007, a-0008, a-0006"
+    And the lane of project "alpha" should show "5 open"
+    And the lane of project "beta" should show "1 open"
+    And the response should contain "Blocked"
+    And the response should contain "Ready"
+    And the response should contain "In progress"
+    And the response should contain "Closed"
+
+  Scenario: A blocked ticket in progress carries a mark
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then card "alpha/a-0005" should have class "is-blocked"
+    And card "alpha/a-0004" should not have class "is-blocked"
+
+  Scenario: A card shows title, priority, type, tags, blockers and parent
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title     | priority | type | tags   | deps          | parent |
+      | a-0001 | Epic one  | 2        | epic |        |               |        |
+      | a-0002 | Open high | 1        | bug  | ui api | a-0003 a-9999 | a-0001 |
+      | a-0003 | Blocker   | 2        |      |        |               |        |
+    And the web server is running
+    When I GET "/"
+    Then card "alpha/a-0002" should contain "a-0002"
+    And card "alpha/a-0002" should contain "Open high"
+    And card "alpha/a-0002" should contain "P1"
+    And card "alpha/a-0002" should contain "bug"
+    And card "alpha/a-0002" should contain "ui"
+    And card "alpha/a-0002" should contain "api"
+    And card "alpha/a-0002" should contain "a-0003"
+    And card "alpha/a-0002" should contain "a-9999"
+    And card "alpha/a-0002" should contain "a-0001"
+    And card "alpha/a-0001" should contain "epic"
+    And the response should contain "href=\"/p/alpha/a-0002\""
+
+  Scenario: A closed dep is not shown as a blocker
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title  | status | deps   |
+      | a-0001 | Needs  | open   | a-0002 |
+      | a-0002 | Done   | closed |        |
+    And the web server is running
+    When I GET "/"
+    Then project "alpha" column "ready" should list "a-0001"
+    And card "alpha/a-0001" should not contain "a-0002"
+
+  Scenario: Two projects with the same ticket id both render
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then project "beta" column "ready" should list "a-0001"
+    And the response should contain "href=\"/p/alpha/a-0001\""
+    And the response should contain "href=\"/p/beta/a-0001\""
+    And card "beta/a-0001" should contain "Beta first"
+
+  Scenario: The flat view merges the projects
+    Given the standard web projects
+    And the web server is running
+    When I GET "/?flat=1"
+    Then the response status should be 200
+    And column "blocked" should list "alpha/a-0003"
+    And column "ready" should list "alpha/a-0002, beta/a-0001, alpha/a-0001"
+    And column "in_progress" should list "alpha/a-0004, alpha/a-0005"
+    And column "closed" should list "alpha/a-0007, alpha/a-0008, alpha/a-0006"
+    And the response should not contain "class=\"lane\""
+    And card "beta/a-0001" should contain "beta"
+    And card "alpha/a-0002" should contain "alpha"
+
+  Scenario: The project page shows one project
+    Given the standard web projects
+    And the web server is running
+    When I GET "/p/alpha"
+    Then the response status should be 200
+    And project "alpha" column "ready" should list "a-0002, a-0001"
+    And project "alpha" column "closed" should list "a-0007, a-0008, a-0006"
+    And the response should not contain "Beta first"
+
+  Scenario: An unknown project page is not found
+    Given the standard web projects
+    And the web server is running
+    When I GET "/p/nope"
+    Then the response status should be 404
+
+  Scenario: The board shows the five newest closed tickets
+    Given a web project "alpha"
+    And web project "alpha" has 7 closed tickets
+    And the web server is running
+    When I GET "/"
+    Then project "alpha" column "closed" should list "c-0007, c-0006, c-0005, c-0004, c-0003"
+    And the response should contain "2 more"
+    And the response should contain "href=\"/p/alpha\""
+    And the lane of project "alpha" should show "0 open"
+    When I GET "/p/alpha"
+    Then project "alpha" column "closed" should list "c-0007, c-0006, c-0005, c-0004, c-0003, c-0002, c-0001"
+    And the response should not contain " more<"
+
+  Scenario: The flat view shows five closed tickets per project
+    Given a web project "alpha"
+    And web project "alpha" has 7 closed tickets
+    And a web project "beta"
+    And web project "beta" has 6 closed tickets
+    And the web server is running
+    When I GET "/?flat=1"
+    Then column "closed" should list "alpha/c-0007, alpha/c-0006, beta/c-0006, alpha/c-0005, beta/c-0005, alpha/c-0004, beta/c-0004, alpha/c-0003, beta/c-0003, beta/c-0002"
+
+  Scenario: The project page shows fifty closed tickets and a link to all
+    Given a web project "alpha"
+    And web project "alpha" has 52 closed tickets
+    And the web server is running
+    When I GET "/p/alpha"
+    Then the response should contain "2 more"
+    And the response should contain "href=\"/p/alpha?closed=all\""
+    And the response should not contain "Closed 2<"
+    And the response should contain "Closed 3<"
+    When I GET "/p/alpha?closed=all"
+    Then the response should contain "Closed 1<"
+    And the response should not contain " more<"
+
+  Scenario: A project without a tickets directory shows an error in its lane
+    Given the standard web projects
+    And a web project "gone" without a tickets directory
+    And the web server is running
+    When I GET "/"
+    Then the response status should be 200
+    And the lane of project "gone" should show an error containing ".tickets"
+    And project "alpha" column "blocked" should list "a-0003"
+    And the lane of project "alpha" should show no error
+
+  Scenario: A project without tickets shows an empty lane
+    Given a web project "empty"
+    And the web server is running
+    When I GET "/"
+    Then project "empty" column "ready" should list ""
+    And project "empty" column "closed" should list ""
+    And the lane of project "empty" should show no error
+    And the lane of project "empty" should show "0 open"
+
+  Scenario: An unknown status goes to Ready with its name
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title    | status |
+      | a-0001 | Reviewed | review |
+    And the web server is running
+    When I GET "/"
+    Then project "alpha" column "ready" should list "a-0001"
+    And card "alpha/a-0001" should contain "review"
+
+  Scenario: A change on disk shows up without a restart
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "Open low"
+    When web ticket "alpha/a-0001" file has "Open low" replaced by "Renamed low"
+    Then GET "/" should eventually contain "Renamed low"
+
+  Scenario: A ticket closed on disk moves to Closed and unblocks its dependent
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then project "alpha" column "blocked" should list "a-0003"
+    When web ticket "alpha/a-0001" file has "status: open" replaced by "status: closed"
+    And I GET "/"
+    Then project "alpha" column "blocked" should list ""
+    And project "alpha" column "ready" should list "a-0002, a-0003"
+    And card "alpha/a-0005" should not have class "is-blocked"
+
+  Scenario: A Russian title renders unchanged
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title          |
+      | a-0001 | Починить поиск |
+    And the web server is running
+    When I GET "/"
+    Then card "alpha/a-0001" should contain "Починить поиск"
+
+  Scenario: HTML in a title is escaped
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title                           |
+      | a-0001 | <script>alert(1)</script> & co |
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "&lt;script&gt;alert(1)&lt;/script&gt; &amp; co"
+    And the response should not contain "<script>alert(1)"
+
+  Scenario: Files that do not parse become unparsable cards
+    Given the standard web projects
+    And web ticket "alpha/bad-0001" has raw bytes "fffe00ff"
+    And web ticket "alpha/nofm-0001" has content:
+      """
+      just text
+      """
+    And the web server is running
+    When I GET "/"
+    Then the response status should be 200
+    And the response should contain "bad-0001.md unparsable"
+    And the response should contain "nofm-0001.md unparsable"
+    And project "alpha" column "ready" should list "a-0002, a-0001"
+    And project "alpha" column "blocked" should list "a-0003"
+
+  # --- Ticket page ---
+
+  Scenario: The ticket page shows the text of every section
+    Given the web project with a full ticket
+    And the web server is running
+    When I GET "/p/alpha/a-0002"
+    Then the response status should be 200
+    And the response should contain "Full ticket"
+    And the response should contain "The description text."
+    And the response should contain "The design text."
+    And the response should contain "The acceptance text."
+    And the response should contain "Risks"
+    And the response should contain "The risk text."
+    And the response should contain "A note text."
+    And the response should contain "2026-02-03T04:05:06Z"
+    And the response should contain "in_progress"
+    And the response should contain "feature"
+    And the response should contain "P1"
+    And the response should contain "namli"
+    And the response should contain "href=\"/p/alpha/a-0002/edit\""
+
+  Scenario: The ticket page lists parent, deps and links
+    Given the web project with a full ticket
+    And the web server is running
+    When I GET "/p/alpha/a-0002"
+    Then relation "parent" should list "a-0001"
+    And relation "deps" should list "a-0003, a-9999"
+    And relation "links" should list "a-0004"
+    And relation "deps" should contain "closed"
+    And relation "deps" should contain "missing"
+    And relation "deps" should have no link to "a-9999"
+    And the response should contain "href=\"/p/alpha/a-0003\""
+
+  Scenario: The ticket page lists children and dependents
+    Given the web project with a full ticket
+    And the web server is running
+    When I GET "/p/alpha/a-0001"
+    Then relation "children" should list "a-0002"
+    When I GET "/p/alpha/a-0003"
+    Then relation "dependents" should list "a-0002"
+    And relation "deps" should list ""
+
+  Scenario: Text on the ticket page is escaped
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Escape <b>me</b>
+
+      Use <script>alert(2)</script> & more.
+      """
+    And the web server is running
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "Escape &lt;b&gt;me&lt;/b&gt;"
+    And the response should contain "&lt;script&gt;alert(2)&lt;/script&gt; &amp; more."
+    And the response should not contain "<script>alert(2)"
+
+  Scenario Outline: A ticket page that does not exist is not found
+    Given the web project with a full ticket
+    And web ticket "alpha/nofm-0001" has content:
+      """
+      just text
+      """
+    And the web server is running
+    When I GET "<path>"
+    Then the response status should be 404
+
+    Examples:
+      | path                       |
+      | /p/alpha/zzz               |
+      | /p/nope/a-0001             |
+      | /p/alpha/..%2Fweb.toml     |
+      | /p/alpha/a-0002/extra      |
+      | /p/alpha/nofm-0001         |
+
+  # --- Editing ---
+
+  Scenario: The edit form shows the current text
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "title" should be "First"
+    And the form field "description" should be "Old description."
+    And the form field "design" should be "Old design."
+    And the form field "acceptance" should be ""
+    And the form field "base" should match "[0-9a-f]{64}"
+    And the response should not contain "EventSource"
+
+  Scenario: A description edit changes only the description
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value            |
+      | description | New description. |
+    Then the response status should be 303
+    And the response header "Location" should be "/p/alpha/a-0001"
+    And web ticket "alpha/a-0001" file should be:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # First
+
+      New description.
+
+      ## Design
+
+      Old design.
+
+      ## Notes
+
+      **2026-01-02T00:00:00Z**
+
+      A note.
+      """
+    And no temp file should remain in web project "alpha"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "New description."
+
+  Scenario: A title edit goes through tk set
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field | value   |
+      | title | Renamed |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Renamed"
+    And web ticket "alpha/a-0001" file should contain "Edited: title"
+    And web ticket "alpha/a-0001" file should contain "Old description."
+    And web ticket "alpha/a-0001" file should contain "A note."
+
+  Scenario: A title that starts with a dash saves
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field | value  |
+      | title | -x fix |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# -x fix"
+
+  Scenario: Title and text change in one save
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value     |
+      | title       | Both      |
+      | description | New text. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Both"
+    And web ticket "alpha/a-0001" file should contain "New text."
+    And web ticket "alpha/a-0001" file should contain "Edited: title"
+    And web ticket "alpha/a-0001" file should not contain "Old description."
+
+  Scenario: A new section appears in order
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field      | value     |
+      | acceptance | It works. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "## Acceptance Criteria\n\nIt works.\n\n## Notes"
+    And in web ticket "alpha/a-0001" file "Old design." should come before "## Acceptance Criteria"
+    And web ticket "alpha/a-0001" front matter and notes should be unchanged
+
+  Scenario: An emptied section loses its heading
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field  | value |
+      | design |       |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should not contain "## Design"
+    And web ticket "alpha/a-0001" file should not contain "Old design."
+    And web ticket "alpha/a-0001" file should contain "Old description.\n\n## Notes"
+    And web ticket "alpha/a-0001" front matter and notes should be unchanged
+
+  Scenario: A ticket with a title only gets all three sections
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Bare
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value |
+      | description | D.    |
+      | design      | G.    |
+      | acceptance  | A.    |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Bare\n\nD.\n\n## Design\n\nG.\n\n## Acceptance Criteria\n\nA.\n"
+    When in web project "alpha" I run "ticket show a-0001"
+    Then the exit code should be 0
+    And the output should contain "G."
+
+  Scenario: Line breaks from the browser become plain line feeds
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value                |
+      | description | Line one\r\nLine two |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "Line one\nLine two\n\n## Design"
+    And web ticket "alpha/a-0001" file should not contain "\r"
+
+  Scenario: A save without changes writes nothing
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A change on disk stops the save and shows the disk text
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "Old description." replaced by "Agent text."
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 409
+    And web ticket "alpha/a-0001" file should contain "Agent text."
+    And web ticket "alpha/a-0001" file should not contain "Mine."
+    And the response should contain "the ticket changed on disk"
+    And the response should contain "Mine."
+    And the disk text of field "description" should contain "Agent text."
+
+  Scenario: The second save after a conflict succeeds
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "Old description." replaced by "Agent text."
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    And I take the form from the response
+    And I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "Mine."
+    And web ticket "alpha/a-0001" file should not contain "Agent text."
+
+  Scenario: A title changed on disk is a conflict too
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "# First" replaced by "# Agent title"
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 409
+    And the disk text of field "title" should contain "Agent title"
+    And web ticket "alpha/a-0001" file should not contain "Mine."
+
+  Scenario: A note added on disk does not block the save
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And a note "Agent note." is appended to web ticket "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "status: open" replaced by "status: in_progress"
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "Mine."
+    And web ticket "alpha/a-0001" file should contain "Agent note."
+    And web ticket "alpha/a-0001" file should contain "status: in_progress"
+
+  Scenario Outline: Text that would break the ticket layout is rejected
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field   | value   |
+      | <field> | <value> |
+    Then the response status should be 400
+    And web ticket "alpha/a-0001" file should be unchanged
+    And the response should contain "<shown>"
+
+    Examples:
+      | field       | value         | shown    |
+      | description | a\n---\nb     | ---      |
+      | design      | x\n## Extra   | ## Extra |
+      | acceptance  | ## Notes      | ## Notes |
+      | title       |               | title    |
+      | title       | One\nTwo      | title    |
+
+  Scenario: A line that starts with one hash is accepted
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field  | value                |
+      | design | # install deps\nmake |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "## Design\n\n# install deps\nmake\n"
+    And web ticket "alpha/a-0001" file should contain "# First\n"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "<h1>First</h1>"
+
+  Scenario: A POST from a foreign origin is rejected
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with header "Origin: http://evil.example" and:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 403
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A POST from the page's own origin is accepted
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with header "Origin: http://127.0.0.1:<port>" and:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 303
+
+  Scenario: Russian text saves unchanged
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value              |
+      | title       | Починить поиск     |
+      | description | Описание по-русски |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Починить поиск"
+    And web ticket "alpha/a-0001" file should contain "Описание по-русски"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "Починить поиск"
+    And the response should contain "Описание по-русски"
+
+  Scenario: A ticket deleted before the save is not found
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" is deleted
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 404
+    When I GET "/"
+    Then the response status should be 200
+
+  Scenario: An unparsable ticket has no edit form
+    Given the web project with an editable ticket
+    And web ticket "alpha/nofm-0001" has content:
+      """
+      just text
+      """
+    And the web server is running
+    When I GET "/p/alpha/nofm-0001/edit"
+    Then the response status should be 404
+    When I GET "/p/alpha/zzz/edit"
+    Then the response status should be 404
+
+  Scenario: Core commands read an edited ticket
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value            |
+      | description | New description. |
+      | design      | New design.      |
+      | acceptance  | New acceptance.  |
+    And in web project "alpha" I run "ticket show a-0001"
+    Then the exit code should be 0
+    And the output should contain "New description."
+    And the output should contain "New design."
+    And the output should contain "New acceptance."
+    And the output should contain "A note."
+    When in web project "alpha" I run "ticket lint"
+    Then the exit code should be 0
+
+  # --- Live refresh and search ---
+
+  Scenario: The event stream opens
+    Given the standard web projects
+    And the web server is running
+    When I listen to "/events"
+    Then the response status should be 200
+    And the response header "Content-Type" should contain "text/event-stream"
+    And the first event line should be a comment
+
+  Scenario: A change on disk raises an event
+    Given the standard web projects
+    And the web server is running
+    When I listen to "/events"
+    And web ticket "beta/a-0001" file has "Beta first" replaced by "Beta renamed"
+    Then an event "beta" should arrive within 5 seconds
+
+  Scenario: No event arrives without a change
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    And I listen to "/events"
+    Then no event should arrive within 2 seconds
+
+  Scenario: The server survives a closed event stream
+    Given the standard web projects
+    And the web server is running
+    When I listen to "/events"
+    And I stop listening
+    And web ticket "alpha/a-0001" file has "Open low" replaced by "Renamed low"
+    Then GET "/" should eventually contain "Renamed low"
+    When I listen to "/events"
+    And web ticket "alpha/a-0002" file has "Open high" replaced by "Renamed high"
+    Then an event "alpha" should arrive within 5 seconds
+    When I GET "/"
+    Then the response status should be 200
+
+  Scenario Outline: Board and ticket pages carry the refresh script
+    Given the standard web projects
+    And the web server is running
+    When I GET "<path>"
+    Then the response should contain "new EventSource('/events')"
+    And the main element should not contain the search box
+
+    Examples:
+      | path            |
+      | /               |
+      | /?flat=1        |
+      | /p/alpha        |
+      | /p/alpha/a-0001 |
+
+  Scenario: Every card carries its search text
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then every card should have a search text
+    And the response should contain "data-search=\"alpha a-0002 open high\""
+
+  # --- Found by the branch review ---
+
+  Scenario: A second Design heading is not the one the form edits
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Twice
+
+      Text.
+
+      ## Design
+
+      FIRST design.
+
+      ## Risks
+
+      A risk.
+
+      ## Design
+
+      SECOND design.
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "design" should be "FIRST design."
+    When I submit the form with:
+      | field  | value  |
+      | design | EDITED |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "## Design\n\nEDITED\n\n## Risks"
+    And web ticket "alpha/a-0001" file should contain "SECOND design."
+    And web ticket "alpha/a-0001" file should not contain "FIRST design."
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "design" should be "EDITED"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "SECOND design."
+
+  Scenario: A file whose id differs from its name is unparsable
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title |
+      | b-0002 | Real  |
+    And web ticket "alpha/b-0001" has content:
+      """
+      ---
+      id: b-0002
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Copy
+
+      Copied text.
+      """
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "b-0001.md unparsable"
+    And project "alpha" column "ready" should list "b-0002"
+    When I GET "/p/alpha/b-0002"
+    Then the response should contain "Real"
+    And the response should not contain "Copied text."
+    When I GET "/p/alpha/b-0001/edit"
+    Then the response status should be 404
+
+  Scenario: Carriage returns in notes survive a save
+    Given the web project with an editable ticket
+    And web ticket "alpha/a-0001" has a note with carriage returns
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field  | value       |
+      | design | New design. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "New design."
+    And web ticket "alpha/a-0001" front matter and notes should be unchanged
+
+  Scenario: A file with CRLF line ends is unparsable, as it is for tk
+    Given the web project with an editable ticket
+    And web ticket "alpha/crlf-0001" is a ticket with CRLF line ends
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "crlf-0001.md unparsable"
+    When I GET "/p/alpha/crlf-0001/edit"
+    Then the response status should be 404
+
+  Scenario Outline: A form without one of its fields is rejected
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form without the field "<field>"
+    Then the response status should be 400
+    And web ticket "alpha/a-0001" file should be unchanged
+
+    Examples:
+      | field       |
+      | title       |
+      | description |
+      | design      |
+      | acceptance  |
+      | base        |
+
+  Scenario: Markup in ticket text is inert on the edit form and survives a save
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Quote > <b>bold</b> & more
+
+      </textarea><script>alert(2)</script>
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the response should not contain "<script>alert(2)"
+    And the response should not contain "<b>bold</b>"
+    And the form field "title" should be "Quote > <b>bold</b> & more"
+    And the form field "description" should be "</textarea><script>alert(2)</script>"
+    When I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A file that is not UTF-8 has no edit form
+    Given the web project with an editable ticket
+    And web ticket "alpha/bad-0001" has raw bytes "fffe00ff"
+    And the web server is running
+    When I GET "/p/alpha/bad-0001/edit"
+    Then the response status should be 404
+    When I GET "/p/alpha/bad-0001"
+    Then the response status should be 404
+
+  Scenario: A ticket with Russian text saves unchanged when nothing is edited
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Починить поиск
+
+      Описание по-русски.
+
+      ## Design
+
+      Решение.
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "title" should be "Починить поиск"
+    And the form field "design" should be "Решение."
+    When I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A ticket id outside ASCII works in links and after a save
+    Given a web project "alpha"
+    And web ticket "alpha/пр-0001" has content:
+      """
+      ---
+      id: пр-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Russian id
+
+      Old text.
+      """
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "href=\"/p/alpha/%D0%BF%D1%80-0001\""
+    When I GET "/p/alpha/%D0%BF%D1%80-0001/edit"
+    Then the response status should be 200
+    When I take the form from the response
+    And I submit the form to "/p/alpha/%D0%BF%D1%80-0001/edit" with:
+      | field       | value     |
+      | description | New text. |
+    Then the response status should be 303
+    And the response header "Location" should be "/p/alpha/%D0%BF%D1%80-0001"
+    And web ticket "alpha/пр-0001" file should contain "New text."
+    When I GET "/p/alpha/%D0%BF%D1%80-0001"
+    Then the response status should be 200
+    And the response should contain "New text."

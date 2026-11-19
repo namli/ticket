@@ -349,3 +349,81 @@ Only the front matter is searched, so a body line such as `priority: high` is le
 Exit codes: `0` changed or unchanged, `1` invalid value, refused field, ticket or parent not found / ambiguous, or the note could not be written, `2` usage error, unknown field, no `.tickets` directory found, or `TK_SCRIPT` unset.
 
 Requires only bash, POSIX awk and `find`.
+
+## ticket-web
+
+`tk web [--port N] [--config PATH]` serves a local kanban board over several tk projects. It shows what is ready and what waits for a blocker, and lets you fix the title or text of a ticket. It does not change status, deps or links.
+
+```
+$ tk web
+tk web: http://127.0.0.1:7420/
+```
+
+The server runs in the foreground until Ctrl-C and does not open a browser. Port order: `--port`, then `port` in the config, then `7420`; `--port 0` picks a free port.
+
+### Config
+
+Path order: `--config`, then `$TK_WEB_CONFIG`, then `~/.config/ticket/web.toml`. The config belongs to one machine, so keep it out of the repository.
+
+```toml
+port = 7420
+
+[[project]]
+name = "ticket"
+path = "~/www/ticket"
+
+[[project]]
+name = "eagle"
+path = "/home/me/www/eagle"
+color = "#3b82f6"
+```
+
+| Key | Rule |
+|---|---|
+| `name` | required, unique, `[A-Za-z0-9_-]+`; used in URLs and on cards |
+| `path` | required; the project root, tickets are read from `<path>/.tickets` |
+| `color` | optional CSS color; the default is derived from the name |
+
+Lanes follow the order of the file. The server reads the config once: restart it after a change. A missing or invalid config stops the server with exit code 1 and prints this example.
+
+### Columns
+
+| Column | Rule |
+|---|---|
+| Blocked | status `open`, listed by `tk blocked` |
+| Ready | status `open`, not listed by `tk blocked` |
+| In progress | status `in_progress`; marked when `tk blocked` lists it |
+| Closed | status `closed` or `done`, newest first by the timestamp of the last note |
+
+Blocked, Ready and In progress are sorted by priority, then ID. A ticket with any other status sits in Ready and shows that status. A file that does not parse appears as an `unparsable` card and has no page: no front matter, not UTF-8, CRLF line ends, or an `id` that differs from the file name.
+
+### Pages
+
+| Route | Content |
+|---|---|
+| `/` | every project as a lane; Closed shows the 5 newest |
+| `/?flat=1` | the same columns without lanes, the project name on each card |
+| `/p/<name>` | one project; Closed shows 50, `?closed=all` shows all |
+| `/p/<name>/<id>` | one ticket: text, parent, children, deps, dependents, links, notes |
+| `/p/<name>/<id>/edit` | edit form |
+
+The search box hides the cards that do not contain the typed text (project, ID, title, tags). The page refreshes itself when a ticket file changes on disk.
+
+### Editing
+
+The form changes the title, the description, `Design` and `Acceptance Criteria`.
+
+- The title goes through `tk set <id> title`, which writes the `Edited:` note. `ticket-set` must be on your PATH.
+- The server replaces the three text sections in the file itself. Front matter, notes and other sections stay byte for byte. Text edits write no note.
+- If the title or one of the three sections changed on disk after the form opened, the save is refused (409) and the form shows the text on disk next to yours. A new note or a status change does not block the save.
+- A changed text with a line `---` or a line that starts with `## ` is refused: the first breaks front matter parsing in `tk`, the second starts a new section.
+- The edit stays uncommitted in that project. Commit it yourself.
+
+### Limits and safety
+
+- The board shows the working tree of the configured path. A ticket closed on another branch or in another worktree stays open on the board until the merge.
+- The server listens on `127.0.0.1` only, rejects requests with a foreign `Host` header and POSTs with a foreign `Origin` header. It has no authentication: do not expose the port.
+- It never passes `--force` and never calls `tk super`.
+- Open tabs each hold one event stream; browsers allow about six per host over HTTP/1.
+
+Requires Python 3.11 or newer (standard library only) and `tk` with `ticket-set`. The Homebrew and AUR package scripts would ship the file without these dependencies; install it with the repository on your PATH.
