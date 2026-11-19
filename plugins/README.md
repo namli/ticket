@@ -395,7 +395,7 @@ Lanes follow the order of the file. The server reads the config once: restart it
 | In progress | status `in_progress`; marked when `tk blocked` lists it |
 | Closed | status `closed` or `done`, newest first by the timestamp of the last note |
 
-Blocked, Ready and In progress are sorted by priority, then ID. A ticket with any other status sits in Ready and shows that status. A file that does not parse appears as an `unparsable` card.
+Blocked, Ready and In progress are sorted by priority, then ID. A ticket with any other status sits in Ready and shows that status. A file that does not parse appears as an `unparsable` card and has no page: no front matter, not UTF-8, CRLF line ends, or an `id` that differs from the file name.
 
 ### Pages
 

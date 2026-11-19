@@ -767,3 +767,214 @@ Feature: Web board
     When I GET "/"
     Then every card should have a search text
     And the response should contain "data-search=\"alpha a-0002 open high\""
+
+  # --- Found by the branch review ---
+
+  Scenario: A second Design heading is not the one the form edits
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Twice
+
+      Text.
+
+      ## Design
+
+      FIRST design.
+
+      ## Risks
+
+      A risk.
+
+      ## Design
+
+      SECOND design.
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "design" should be "FIRST design."
+    When I submit the form with:
+      | field  | value  |
+      | design | EDITED |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "## Design\n\nEDITED\n\n## Risks"
+    And web ticket "alpha/a-0001" file should contain "SECOND design."
+    And web ticket "alpha/a-0001" file should not contain "FIRST design."
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "design" should be "EDITED"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "SECOND design."
+
+  Scenario: A file whose id differs from its name is unparsable
+    Given a web project "alpha"
+    And web project "alpha" has tickets:
+      | id     | title |
+      | b-0002 | Real  |
+    And web ticket "alpha/b-0001" has content:
+      """
+      ---
+      id: b-0002
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Copy
+
+      Copied text.
+      """
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "b-0001.md unparsable"
+    And project "alpha" column "ready" should list "b-0002"
+    When I GET "/p/alpha/b-0002"
+    Then the response should contain "Real"
+    And the response should not contain "Copied text."
+    When I GET "/p/alpha/b-0001/edit"
+    Then the response status should be 404
+
+  Scenario: Carriage returns in notes survive a save
+    Given the web project with an editable ticket
+    And web ticket "alpha/a-0001" has a note with carriage returns
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field  | value       |
+      | design | New design. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "New design."
+    And web ticket "alpha/a-0001" front matter and notes should be unchanged
+
+  Scenario: A file with CRLF line ends is unparsable, as it is for tk
+    Given the web project with an editable ticket
+    And web ticket "alpha/crlf-0001" is a ticket with CRLF line ends
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "crlf-0001.md unparsable"
+    When I GET "/p/alpha/crlf-0001/edit"
+    Then the response status should be 404
+
+  Scenario Outline: A form without one of its fields is rejected
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form without the field "<field>"
+    Then the response status should be 400
+    And web ticket "alpha/a-0001" file should be unchanged
+
+    Examples:
+      | field       |
+      | title       |
+      | description |
+      | design      |
+      | acceptance  |
+      | base        |
+
+  Scenario: Markup in ticket text is inert on the edit form and survives a save
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Quote > <b>bold</b> & more
+
+      </textarea><script>alert(2)</script>
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the response should not contain "<script>alert(2)"
+    And the response should not contain "<b>bold</b>"
+    And the form field "title" should be "Quote > <b>bold</b> & more"
+    And the form field "description" should be "</textarea><script>alert(2)</script>"
+    When I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A file that is not UTF-8 has no edit form
+    Given the web project with an editable ticket
+    And web ticket "alpha/bad-0001" has raw bytes "fffe00ff"
+    And the web server is running
+    When I GET "/p/alpha/bad-0001/edit"
+    Then the response status should be 404
+    When I GET "/p/alpha/bad-0001"
+    Then the response status should be 404
+
+  Scenario: A ticket with Russian text saves unchanged when nothing is edited
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Починить поиск
+
+      Описание по-русски.
+
+      ## Design
+
+      Решение.
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "title" should be "Починить поиск"
+    And the form field "design" should be "Решение."
+    When I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A ticket id outside ASCII works in links and after a save
+    Given a web project "alpha"
+    And web ticket "alpha/пр-0001" has content:
+      """
+      ---
+      id: пр-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Russian id
+
+      Old text.
+      """
+    And the web server is running
+    When I GET "/"
+    Then the response should contain "href=\"/p/alpha/%D0%BF%D1%80-0001\""
+    When I GET "/p/alpha/%D0%BF%D1%80-0001/edit"
+    Then the response status should be 200
+    When I take the form from the response
+    And I submit the form to "/p/alpha/%D0%BF%D1%80-0001/edit" with:
+      | field       | value     |
+      | description | New text. |
+    Then the response status should be 303
+    And the response header "Location" should be "/p/alpha/%D0%BF%D1%80-0001"
+    And web ticket "alpha/пр-0001" file should contain "New text."
+    When I GET "/p/alpha/%D0%BF%D1%80-0001"
+    Then the response status should be 200
+    And the response should contain "New text."

@@ -23,7 +23,7 @@ import zlib
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 DEFAULT_PORT = 7420
 DEFAULT_CONFIG = '~/.config/ticket/web.toml'
@@ -194,9 +194,10 @@ def parse_ticket(text: str, filename: str) -> Ticket:
         key, sep, value = line.partition(':')
         if sep:
             fields[key.strip()] = value.strip()
-    if not fields.get('id'):
+    # tk finds a ticket by its file name; a file whose id says otherwise (a copied file)
+    # would send tk set to another file, so it is not a ticket here
+    if fields.get('id') != ticket.id:
         return ticket
-    ticket.id = fields['id']
     ticket.parsed = True
     ticket.status = fields.get('status', '')
     ticket.type = fields.get('type') or 'task'
@@ -211,27 +212,41 @@ def parse_ticket(text: str, filename: str) -> Ticket:
     ticket.links = yaml_list(fields.get('links', ''))
     ticket.tags = yaml_list(fields.get('tags', ''))
     ticket.title = lines[title_index][2:].strip()
+    seen = set()
     for heading, start, end in chunks:
         if heading == '':
             ticket.description = trim_blank(lines[start:end])
             continue
         body = trim_blank(lines[start + 1:end])
-        if heading == 'Design':
+        # the first heading of a kind is the editable one (replace_sections picks it too);
+        # a repeated heading is shown read-only with the other sections
+        if heading == 'Design' and 'Design' not in seen:
             ticket.design = body
-        elif heading == 'Acceptance Criteria':
+        elif heading == 'Acceptance Criteria' and heading not in seen:
             ticket.acceptance = body
-        elif heading == 'Notes':
+        elif heading == 'Notes' and heading not in seen:
             ticket.notes = body
         else:
             ticket.others.append((heading, body))
+        seen.add(heading)
     stamps = NOTE_STAMP.findall(ticket.notes)
     ticket.last_note = stamps[-1] if stamps else ''
     return ticket
 
 
+def read_exact(path: Path) -> str:
+    """Read a file as UTF-8 without newline translation.
+
+    Path.read_text turns every CR into LF; a save would then rewrite notes it must not touch.
+    A file with CRLF line ends does not parse here, as it does not for the core tk.
+    """
+    with open(path, encoding='utf-8', newline='') as handle:
+        return handle.read()
+
+
 def read_ticket(path: Path) -> Ticket:
     try:
-        text = path.read_text(encoding='utf-8')
+        text = read_exact(path)
     except (UnicodeDecodeError, OSError):
         return Ticket(id=path.name.removesuffix('.md'), file=path.name)
     return parse_ticket(text, path.name)
@@ -412,7 +427,7 @@ def build_snapshot(project: Project, stamp: frozenset) -> Snapshot:
     tickets = {}
     for name in sorted(entry[0] for entry in stamp):
         ticket = read_ticket(tickets_dir(project) / name)
-        key = ticket.id if ticket.parsed and ticket.id not in tickets else f'{name}#file'
+        key = ticket.id if ticket.parsed else f'{name}#file'
         tickets[key] = ticket
     blocked, error = set(), ''
     if stamp:       # tk blocked exits 2 with empty stderr on a directory without tickets
@@ -486,6 +501,11 @@ class Store:
 
 def esc(value) -> str:
     return html.escape(str(value), quote=True)
+
+
+def ticket_url(project: Project, ticket_id: str) -> str:
+    """Path of a ticket page. The id is percent-encoded: ids can hold any character."""
+    return f'/p/{project.name}/{quote(ticket_id, safe="")}'
 
 
 CSS = """
@@ -676,7 +696,7 @@ def render_card(project: Project, ticket: Ticket, snapshot: Snapshot, show_proje
     if ticket.parent:
         parts.append(f'<span class="parent" title="parent">&#8593; {esc(ticket.parent)}</span>')
     return (f'<a class="{classes}" data-project="{esc(project.name)}" data-id="{esc(ticket.id)}" '
-            f'data-search="{esc(search)}" href="/p/{esc(project.name)}/{esc(ticket.id)}" '
+            f'data-search="{esc(search)}" href="{esc(ticket_url(project, ticket.id))}" '
             f'style="--pc: {esc(project.color)}">{" ".join(parts)}</a>')
 
 
@@ -761,7 +781,7 @@ def render_relation(project: Project, snapshot: Snapshot, rel: str, title: str, 
                          '<span class="status">missing</span></li>')
         else:
             items.append(f'<li data-id="{esc(ticket_id)}">'
-                         f'<a href="/p/{esc(project.name)}/{esc(ticket_id)}">{esc(ticket_id)}</a> '
+                         f'<a href="{esc(ticket_url(project, ticket_id))}">{esc(ticket_id)}</a> '
                          f'{esc(other.title)} <span class="status">{esc(other.status)}</span></li>')
     return f'<div class="rel"><h3>{title}</h3><ul data-rel="{rel}">{"".join(items)}</ul></div>'
 
@@ -777,7 +797,7 @@ def render_ticket(app, project: Project, snapshot: Snapshot, ticket: Ticket) -> 
     parsed = sorted((t for t in snapshot.tickets.values() if t.parsed), key=lambda t: t.id)
     children = [t.id for t in parsed if t.parent == ticket.id]
     dependents = [t.id for t in parsed if ticket.id in t.deps]
-    base = f'/p/{esc(project.name)}/{esc(ticket.id)}'
+    base = esc(ticket_url(project, ticket.id))
     meta = [('Status', ticket.status), ('Type', ticket.type), ('Priority', f'P{ticket.priority}'),
             ('Assignee', ticket.assignee), ('Tags', ', '.join(ticket.tags)), ('Created', ticket.created)]
     meta_html = ''.join(f'<dt>{esc(key)}</dt><dd>{esc(value)}</dd>' for key, value in meta if value)
@@ -805,7 +825,7 @@ def render_ticket(app, project: Project, snapshot: Snapshot, ticket: Ticket) -> 
 def render_form(project: Project, ticket_id: str, values: dict[str, str], base: str,
                 messages: list[str] | None = None, disk: dict[str, str] | None = None) -> str:
     """The edit form. disk holds the on-disk text of the fields to show next to the submitted text."""
-    base_url = f'/p/{esc(project.name)}/{esc(ticket_id)}'
+    base_url = esc(ticket_url(project, ticket_id))
     out = [f'<article class="ticket" style="--pc: {esc(project.color)}">',
            f'<p class="crumb"><a href="/p/{esc(project.name)}">{esc(project.name)}</a> / '
            f'<a href="{base_url}">{esc(ticket_id)}</a> / edit</p>']
@@ -940,9 +960,13 @@ class Handler(BaseHTTPRequestHandler):
         if form is None:
             self.send_error_page(400, 'Bad form data')
             return
-        submitted = {'title': normal_title(form.get('title', ''))}
+        # a browser always sends every field; a missing one must not read as "emptied"
+        if any(name not in form for name in (*EDIT_FIELDS, 'base')):
+            self.send_error_page(400, 'Bad form data: a field is missing')
+            return
+        submitted = {'title': normal_title(form['title'])}
         for name in ('description', 'design', 'acceptance'):
-            submitted[name] = normal_text(form.get(name, ''))
+            submitted[name] = normal_text(form[name])
 
         def form_page(status: int, messages: list[str], base: str, disk: dict | None = None):
             body = render_form(project, ticket.id, submitted, base, messages, disk)
@@ -952,7 +976,7 @@ class Handler(BaseHTTPRequestHandler):
             # the file name comes from the snapshot, never from the URL
             path = tickets_dir(project) / ticket.file
             try:
-                current = parse_ticket(path.read_text(encoding='utf-8'), ticket.file)
+                current = parse_ticket(read_exact(path), ticket.file)
             except (OSError, UnicodeDecodeError):
                 current = None
             if current is None or not current.parsed or current.id != ticket.id:
@@ -960,7 +984,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             on_disk = edit_values(current)
             disk_hash = edit_hash(**on_disk)
-            if disk_hash != form.get('base', ''):
+            on_disk = {name: normal_title(value) if name == 'title' else normal_text(value)
+                       for name, value in on_disk.items()}
+            if disk_hash != form['base']:
                 differing = {name: on_disk[name] for name in EDIT_FIELDS if on_disk[name] != submitted[name]}
                 form_page(409, ['the ticket changed on disk - compare and save again'], disk_hash, differing)
                 return
@@ -976,7 +1002,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
             if any(name in changed for name in ('description', 'design', 'acceptance')):
                 try:
-                    text = path.read_text(encoding='utf-8')     # tk set may have rewritten the file
+                    text = read_exact(path)     # tk set may have rewritten the file
                     write_ticket_file(path, replace_sections(text, *(
                         submitted[name] if name in changed else None
                         for name in ('description', 'design', 'acceptance'))))
@@ -985,7 +1011,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
             app.store.refresh(project.name)
         self.send_response(303)
-        self.send_header('Location', f'/p/{project.name}/{ticket.id}')
+        self.send_header('Location', ticket_url(project, ticket.id))
         self.send_header('Content-Length', '0')
         self.end_headers()
 

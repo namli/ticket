@@ -380,6 +380,19 @@ def step_web_ticket_bytes(context, ref, hexdata):
     ticket_file(context, ref).write_bytes(bytes.fromhex(hexdata))
 
 
+@given(r'web ticket "(?P<ref>[^"]+)" has a note with carriage returns')
+def step_note_with_cr(context, ref):
+    with open(ticket_file(context, ref), 'ab') as handle:
+        handle.write(b'\n**2026-03-01T00:00:00Z**\n\nprogress 10%\rprogress 100%\r\nend\n')
+
+
+@given(r'web ticket "(?P<ref>[^"]+)" is a ticket with CRLF line ends')
+def step_crlf_ticket(context, ref):
+    ticket_id = ref.split('/', 1)[1]
+    text = EDITABLE_TICKET.replace('id: a-0001', f'id: {ticket_id}')
+    ticket_file(context, ref).write_bytes(text.replace('\n', '\r\n').encode('utf-8'))
+
+
 @given(r'a web config:')
 def step_web_config(context):
     config_path(context).write_text(context.text.replace('{dir}', context.test_dir) + '\n')
@@ -444,6 +457,20 @@ def step_submit_header(context, header):
 
 @when(r'I submit the form with:')
 def step_submit_with(context):
+    submit(context)
+
+
+@when(r'I submit the form without the field "(?P<field>[^"]+)"')
+def step_submit_without(context, field):
+    fields = dict(context.web_form)
+    del fields[field]
+    body = urllib.parse.urlencode(fields).encode('utf-8')
+    request(context, 'POST', context.web_form_path, body=body)
+
+
+@when(r'I submit the form to "(?P<path>[^"]+)" with:')
+def step_submit_to(context, path):
+    context.web_form_path = path
     submit(context)
 
 
