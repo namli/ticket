@@ -1,6 +1,6 @@
 ---
 id: tic-rceq
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-11-19T15:34:27Z
@@ -27,3 +27,7 @@ Scenarios in features/ticket_web.feature: with a config of two projects GET /, /
 **2026-11-19T16:10:44Z**
 
 Edited: scope narrowed after the design discussion with the owner (docs/superpowers/specs/2026-11-19-ticket-web-design.md). Removed: drag and drop, status writes (tk start/close/reopen), htmx, SortableJS, the web/ directory, the /all route, filters by assignee and priority. Added: four columns with Blocked split from Ready, lanes per project, ticket page, edit of title and text with conflict detection. Body rewritten to match.
+
+**2026-11-19T17:21:41Z**
+
+Closed: done - plugins/ticket-web 1.0.0 (tk web): local board over the projects in ~/.config/ticket/web.toml with Blocked, Ready, In progress and Closed columns, lanes and flat view, ticket page, edit form for title and text with conflict detection, live refresh and search; 87 scenarios in features/ticket_web.feature; README.md, plugins/README.md, CHANGELOG.md and docs/ticket-web.md updated
