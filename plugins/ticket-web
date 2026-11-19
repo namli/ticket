@@ -12,10 +12,12 @@ import html
 import os
 import re
 import signal
+import subprocess
 import sys
+import threading
 import tomllib
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -35,6 +37,9 @@ name = "eagle"
 path = "/home/me/www/eagle"
 color = "#3b82f6"
 '''
+
+BOARD_CLOSED_LIMIT = 5
+PROJECT_CLOSED_LIMIT = 50
 
 COLUMNS = [('blocked', 'Blocked'), ('ready', 'Ready'),
            ('in_progress', 'In progress'), ('closed', 'Closed')]
@@ -101,6 +106,228 @@ def load_config(path: Path) -> Config:
 
 
 # ============================================================================
+# Tickets
+# ============================================================================
+
+NOTE_STAMP = re.compile(r'^\*\*(\d{4}-\d{2}-\d{2}T[\d:]+Z)\*\*$', re.MULTILINE)
+KNOWN_STATUSES = {'open', 'in_progress', 'closed', 'done'}
+
+
+@dataclass
+class Ticket:
+    id: str
+    file: str
+    parsed: bool = False
+    status: str = ''
+    type: str = 'task'
+    priority: int = 2
+    assignee: str = ''
+    created: str = ''
+    parent: str = ''
+    deps: list[str] = field(default_factory=list)
+    links: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    title: str = ''
+    description: str = ''
+    design: str = ''
+    acceptance: str = ''
+    others: list[tuple[str, str]] = field(default_factory=list)
+    notes: str = ''
+    last_note: str = ''
+
+
+def yaml_list(value: str) -> list[str]:
+    return [item.strip() for item in value.strip().strip('[]').split(',') if item.strip()]
+
+
+def trim_blank(lines: list[str]) -> str:
+    """Join lines without the leading and trailing blank ones."""
+    start, end = 0, len(lines)
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return '\n'.join(lines[start:end])
+
+
+def split_file(text: str):
+    """Return (front_lines, title_index, chunks) or None when the layout is not a ticket.
+
+    All indexes refer to text.split('\\n'). chunks is a list of (heading, start, end):
+    heading is '' for the description, otherwise the text after '## '; start is the first
+    line of the chunk (the heading line itself for a section), end is exclusive.
+    """
+    lines = text.split('\n')
+    if not lines or lines[0] != '---':
+        return None
+    try:
+        close = lines.index('---', 1)
+    except ValueError:
+        return None
+    title_index = next((i for i in range(close + 1, len(lines)) if lines[i].startswith('# ')), None)
+    if title_index is None:
+        return None
+    starts = [i for i in range(title_index + 1, len(lines)) if lines[i].startswith('## ')]
+    bounds = [title_index + 1] + starts + [len(lines)]
+    chunks = []
+    for n in range(len(bounds) - 1):
+        heading = '' if n == 0 else lines[bounds[n]][3:].strip()
+        chunks.append((heading, bounds[n], bounds[n + 1]))
+    return lines[1:close], title_index, chunks
+
+
+def parse_ticket(text: str, filename: str) -> Ticket:
+    ticket = Ticket(id=filename.removesuffix('.md'), file=filename)
+    parts = split_file(text)
+    if parts is None:
+        return ticket
+    front, title_index, chunks = parts
+    lines = text.split('\n')
+    fields = {}
+    for line in front:
+        key, sep, value = line.partition(':')
+        if sep:
+            fields[key.strip()] = value.strip()
+    if not fields.get('id'):
+        return ticket
+    ticket.id = fields['id']
+    ticket.parsed = True
+    ticket.status = fields.get('status', '')
+    ticket.type = fields.get('type') or 'task'
+    try:
+        ticket.priority = int(fields.get('priority', '2'))
+    except ValueError:
+        ticket.priority = 2
+    ticket.assignee = fields.get('assignee', '')
+    ticket.created = fields.get('created', '')
+    ticket.parent = fields.get('parent', '')
+    ticket.deps = yaml_list(fields.get('deps', ''))
+    ticket.links = yaml_list(fields.get('links', ''))
+    ticket.tags = yaml_list(fields.get('tags', ''))
+    ticket.title = lines[title_index][2:].strip()
+    for heading, start, end in chunks:
+        if heading == '':
+            ticket.description = trim_blank(lines[start:end])
+            continue
+        body = trim_blank(lines[start + 1:end])
+        if heading == 'Design':
+            ticket.design = body
+        elif heading == 'Acceptance Criteria':
+            ticket.acceptance = body
+        elif heading == 'Notes':
+            ticket.notes = body
+        else:
+            ticket.others.append((heading, body))
+    stamps = NOTE_STAMP.findall(ticket.notes)
+    ticket.last_note = stamps[-1] if stamps else ''
+    return ticket
+
+
+def read_ticket(path: Path) -> Ticket:
+    try:
+        text = path.read_text(encoding='utf-8')
+    except (UnicodeDecodeError, OSError):
+        return Ticket(id=path.name.removesuffix('.md'), file=path.name)
+    return parse_ticket(text, path.name)
+
+
+def column_of(ticket: Ticket, blocked: set[str]) -> str:
+    if ticket.status in ('closed', 'done'):
+        return 'closed'
+    if ticket.status == 'in_progress':
+        return 'in_progress'
+    return 'blocked' if ticket.id in blocked else 'ready'
+
+
+# ============================================================================
+# Snapshots
+# ============================================================================
+
+MISSING_STAMP = frozenset({('<missing>', 0, 0)})
+
+
+@dataclass
+class Snapshot:
+    tickets: dict[str, Ticket]
+    blocked: set[str]
+    error: str
+    stamp: frozenset
+
+
+def tickets_dir(project: Project) -> Path:
+    return project.path / '.tickets'
+
+
+def run_tk(project: Project, *args: str) -> subprocess.CompletedProcess:
+    """Run tk for one project. Never through a shell; TICKETS_DIR is set explicitly."""
+    program = os.environ.get('TK_SCRIPT') or 'tk'
+    env = dict(os.environ, TICKETS_DIR=str(tickets_dir(project)))
+    try:
+        return subprocess.run([program, *args], cwd=project.path, env=env, text=True,
+                              capture_output=True, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess([program, *args], 127, '', str(exc))
+
+
+def dir_stamp(project: Project) -> frozenset:
+    try:
+        entries = []
+        with os.scandir(tickets_dir(project)) as scan:
+            for entry in scan:
+                if entry.name.endswith('.md') and not entry.name.startswith('.'):
+                    info = entry.stat()
+                    entries.append((entry.name, info.st_mtime_ns, info.st_size))
+        return frozenset(entries)
+    except OSError:
+        return MISSING_STAMP
+
+
+def build_snapshot(project: Project, stamp: frozenset) -> Snapshot:
+    if stamp == MISSING_STAMP:
+        return Snapshot({}, set(), f'{tickets_dir(project)} not found', stamp)
+    tickets = {}
+    for name in sorted(entry[0] for entry in stamp):
+        ticket = read_ticket(tickets_dir(project) / name)
+        key = ticket.id if ticket.parsed and ticket.id not in tickets else f'{name}#file'
+        tickets[key] = ticket
+    blocked, error = set(), ''
+    if stamp:       # tk blocked exits 2 with empty stderr on a directory without tickets
+        result = run_tk(project, 'blocked')
+        if result.returncode != 0:
+            error = f'tk blocked failed (exit {result.returncode}): {result.stderr.strip()}'
+        else:
+            blocked = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
+    return Snapshot(tickets, blocked, error, stamp)
+
+
+class Store:
+    """One snapshot per project, rebuilt when the files on disk differ from its stamp."""
+
+    def __init__(self, projects: list[Project]):
+        self.projects = {p.name: p for p in projects}
+        self.snapshots: dict[str, Snapshot] = {}
+        self.read_locks = {p.name: threading.Lock() for p in projects}
+        self.write_locks = {p.name: threading.Lock() for p in projects}
+
+    def refresh(self, name: str) -> bool:
+        project = self.projects[name]
+        with self.read_locks[name]:
+            stamp = dir_stamp(project)
+            current = self.snapshots.get(name)
+            if current is not None and current.stamp == stamp:
+                return False
+            self.snapshots[name] = build_snapshot(project, stamp)
+            return True
+
+    def get(self, name: str) -> Snapshot:
+        self.refresh(name)
+        return self.snapshots[name]
+
+    def lock(self, name: str) -> threading.Lock:
+        return self.write_locks[name]
+
+
+# ============================================================================
 # HTML
 # ============================================================================
 
@@ -122,12 +349,127 @@ def page(app, title: str, main_html: str) -> str:
     )
 
 
-def render_lane(app, project: Project) -> str:
-    return f'<div class="lane" data-project="{esc(project.name)}"></div>'
+def sorted_columns(snapshot: Snapshot) -> dict[str, list[Ticket]]:
+    """Tickets of one project per column, in display order."""
+    columns = {key: [] for key, _ in COLUMNS}
+    for ticket in snapshot.tickets.values():
+        if ticket.parsed:
+            columns[column_of(ticket, snapshot.blocked)].append(ticket)
+    for key in ('blocked', 'ready', 'in_progress'):
+        columns[key].sort(key=lambda t: (t.priority, t.id))
+    columns['closed'].sort(key=lambda t: t.id)
+    columns['closed'].sort(key=lambda t: t.last_note or t.created, reverse=True)
+    return columns
+
+
+def open_blockers(ticket: Ticket, snapshot: Snapshot) -> list[str]:
+    result = []
+    for dep in ticket.deps:
+        other = snapshot.tickets.get(dep)
+        if other is None or column_of(other, snapshot.blocked) != 'closed':
+            result.append(dep)
+    return result
+
+
+def render_card(project: Project, ticket: Ticket, snapshot: Snapshot, show_project: bool) -> str:
+    classes = 'card'
+    if ticket.status == 'in_progress' and ticket.id in snapshot.blocked:
+        classes += ' is-blocked'
+    search = ' '.join([project.name, ticket.id, ticket.title, *ticket.tags]).lower()
+    parts = [f'<span class="id">{esc(ticket.id)}</span>',
+             f'<span class="pri p{ticket.priority}">P{ticket.priority}</span>',
+             f'<span class="type">{esc(ticket.type)}</span>']
+    if ticket.status not in KNOWN_STATUSES:
+        parts.append(f'<span class="status">{esc(ticket.status or "no status")}</span>')
+    if show_project:
+        parts.append(f'<span class="proj">{esc(project.name)}</span>')
+    parts.append(f'<span class="title">{esc(ticket.title)}</span>')
+    if ticket.tags:
+        tags = ''.join(f'<span class="tag">{esc(tag)}</span>' for tag in ticket.tags)
+        parts.append(f'<span class="tags">{tags}</span>')
+    blockers = open_blockers(ticket, snapshot)
+    if blockers:
+        parts.append(f'<span class="blockers" title="open blockers">&#9940; {esc(" ".join(blockers))}</span>')
+    if ticket.parent:
+        parts.append(f'<span class="parent" title="parent">&#8593; {esc(ticket.parent)}</span>')
+    return (f'<a class="{classes}" data-project="{esc(project.name)}" data-id="{esc(ticket.id)}" '
+            f'data-search="{esc(search)}" href="/p/{esc(project.name)}/{esc(ticket.id)}" '
+            f'style="--pc: {esc(project.color)}">{" ".join(parts)}</a>')
+
+
+def render_unparsable(snapshot: Snapshot) -> str:
+    return ''.join(f'<div class="card unparsable">{esc(t.file)} unparsable</div>'
+                   for t in snapshot.tickets.values() if not t.parsed)
+
+
+def render_column(key: str, title: str, cards_html: str, count: int) -> str:
+    return (f'<section class="col" data-col="{key}"><h2>{title} <span class="n">{count}</span></h2>'
+            f'{cards_html}</section>')
+
+
+def render_lane(app, project: Project, closed_limit: int | None, more_href: str) -> str:
+    snapshot = app.store.get(project.name)
+    columns = sorted_columns(snapshot)
+    open_count = sum(len(columns[key]) for key in ('blocked', 'ready', 'in_progress'))
+    out = [f'<div class="lane" data-project="{esc(project.name)}" style="--pc: {esc(project.color)}">',
+           f'<div class="lane-head"><a href="/p/{esc(project.name)}">{esc(project.name)}</a>'
+           f'<span class="count">{open_count} open</span></div>']
+    if snapshot.error:
+        out.append(f'<div class="lane-error">{esc(snapshot.error)}</div>')
+    for key, title in COLUMNS:
+        tickets = columns[key]
+        shown = tickets
+        if key == 'closed' and closed_limit is not None:
+            shown = tickets[:closed_limit]
+        cards = ''.join(render_card(project, t, snapshot, False) for t in shown)
+        if key == 'ready':
+            cards += render_unparsable(snapshot)
+        if len(shown) < len(tickets):
+            cards += f'<a class="more" href="{esc(more_href)}">{len(tickets) - len(shown)} more</a>'
+        out.append(render_column(key, title, cards, len(tickets)))
+    out.append('</div>')
+    return '\n'.join(out)
 
 
 def render_board(app) -> str:
-    return '\n'.join(render_lane(app, p) for p in app.config.projects)
+    return '\n'.join(render_lane(app, p, BOARD_CLOSED_LIMIT, f'/p/{p.name}')
+                     for p in app.config.projects)
+
+
+def render_flat(app) -> str:
+    merged = {key: [] for key, _ in COLUMNS}
+    totals = {key: 0 for key, _ in COLUMNS}
+    extra = {key: '' for key, _ in COLUMNS}
+    errors = []
+    for project in app.config.projects:
+        snapshot = app.store.get(project.name)
+        if snapshot.error:
+            errors.append(f'<div class="lane-error">{esc(project.name)}: {esc(snapshot.error)}</div>')
+        columns = sorted_columns(snapshot)
+        for key, _ in COLUMNS:
+            tickets = columns[key]
+            totals[key] += len(tickets)
+            shown = tickets[:BOARD_CLOSED_LIMIT] if key == 'closed' else tickets
+            merged[key] += [(project, snapshot, t) for t in shown]
+            if len(shown) < len(tickets):
+                extra[key] += (f'<a class="more" href="/p/{esc(project.name)}">'
+                               f'{esc(project.name)}: {len(tickets) - len(shown)} more</a>')
+        extra['ready'] += render_unparsable(snapshot)
+    for key in ('blocked', 'ready', 'in_progress'):
+        merged[key].sort(key=lambda item: (item[2].priority, item[2].id))
+    merged['closed'].sort(key=lambda item: item[2].id)
+    merged['closed'].sort(key=lambda item: item[2].last_note or item[2].created, reverse=True)
+    out = errors + ['<div class="flat">']
+    for key, title in COLUMNS:
+        cards = ''.join(render_card(project, t, snapshot, True) for project, snapshot, t in merged[key])
+        out.append(render_column(key, title, cards + extra[key], totals[key]))
+    out.append('</div>')
+    return '\n'.join(out)
+
+
+def render_project(app, project: Project, show_all: bool) -> str:
+    limit = None if show_all else PROJECT_CLOSED_LIMIT
+    return render_lane(app, project, limit, f'/p/{project.name}?closed=all')
 
 
 # ============================================================================
@@ -137,6 +479,7 @@ def render_board(app) -> str:
 class App:
     def __init__(self, config: Config):
         self.config = config
+        self.store = Store(config.projects)
         self.port = 0
 
     def project(self, name: str) -> Project | None:
@@ -188,8 +531,16 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def route(self, method: str, path: str, query: dict):
+        app = self.app
         if method == 'GET' and path == '/':
-            self.send_html(200, page(self.app, 'Board', render_board(self.app)))
+            flat = query.get('flat', [''])[0] not in ('', '0')
+            self.send_html(200, page(app, 'Board', render_flat(app) if flat else render_board(app)))
+            return
+        match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)', path)
+        project = app.project(match.group(1)) if match else None
+        if method == 'GET' and project is not None:
+            show_all = query.get('closed', [''])[0] == 'all'
+            self.send_html(200, page(app, project.name, render_project(app, project, show_all)))
             return
         self.send_error_page(404, 'Not found')
 

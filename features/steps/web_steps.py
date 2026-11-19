@@ -241,6 +241,39 @@ def step_web_tickets(context, name):
         ticket_file(context, f'{name}/{ticket_id}').write_text('\n'.join(lines), encoding='utf-8')
 
 
+STANDARD_ALPHA = [
+    # id, title, status, priority, deps, last_note
+    ('a-0001', 'Open low', 'open', 3, '', ''),
+    ('a-0002', 'Open high', 'open', 1, '', ''),
+    ('a-0003', 'Waits', 'open', 2, 'a-0001', ''),
+    ('a-0004', 'Working', 'in_progress', 2, '', ''),
+    ('a-0005', 'Working waits', 'in_progress', 2, 'a-0001', ''),
+    ('a-0006', 'Old close', 'closed', 2, '', '2026-01-01T00:00:00Z'),
+    ('a-0007', 'New close', 'closed', 2, '', '2026-03-01T00:00:00Z'),
+    ('a-0008', 'Legacy done', 'done', 2, '', '2026-02-01T00:00:00Z'),
+]
+
+
+def write_simple_ticket(context, name, ticket_id, title, status='open', priority=2, deps='', last_note=''):
+    lines = ['---', f'id: {ticket_id}', f'status: {status}', f'deps: [{", ".join(deps.split())}]',
+             'links: []', 'created: 2025-01-01T00:00:00Z', 'type: task', f'priority: {priority}',
+             '---', f'# {title}', '', f'Description of {ticket_id}', '']
+    if last_note:
+        lines += ['## Notes', '', f'**{last_note}**', '', 'Closed: done', '']
+    ticket_file(context, f'{name}/{ticket_id}').write_text('\n'.join(lines), encoding='utf-8')
+
+
+@given(r'the standard web projects')
+def step_standard_projects(context):
+    """alpha: one ticket per board state; beta: one ticket with an id that alpha also uses."""
+    for name in ('alpha', 'beta'):
+        (project_dir(context, name) / '.tickets').mkdir(parents=True)
+        register_project(context, name)
+    for row in STANDARD_ALPHA:
+        write_simple_ticket(context, 'alpha', *row)
+    write_simple_ticket(context, 'beta', 'a-0001', 'Beta first')
+
+
 @given(r'web project "(?P<name>[^"]+)" has (?P<count>\d+) closed tickets')
 def step_web_closed_tickets(context, name, count):
     for i in range(1, int(count) + 1):
@@ -530,6 +563,12 @@ def step_card_lacks_class(context, ref, cls):
 def step_card_contains(context, ref, text):
     card = find_card(context, ref)
     assert text in card.text(), f"Card {ref} text: {card.text()!r}"
+
+
+@then(r'card "(?P<ref>[^"]+)" should not contain "(?P<text>[^"]+)"')
+def step_card_not_contains(context, ref, text):
+    card = find_card(context, ref)
+    assert text not in card.text(), f"Card {ref} text: {card.text()!r}"
 
 
 @then(r'every card should have a search text')
