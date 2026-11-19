@@ -3,6 +3,7 @@
 import http.client
 import os
 import select
+import socket
 import subprocess
 import threading
 import time
@@ -510,6 +511,7 @@ def step_run_in_project(context, name, command):
 def step_listen(context, path):
     conn = http.client.HTTPConnection('127.0.0.1', context.web_port, timeout=30)
     conn.request('GET', path)
+    context.web_event_sock = conn.sock      # getresponse() detaches it from the connection
     resp = conn.getresponse()
     context.web_status = resp.status
     context.web_headers = {k.lower(): v for k, v in resp.getheaders()}
@@ -536,6 +538,11 @@ def step_listen(context, path):
 
 @when(r'I stop listening')
 def step_stop_listening(context):
+    # shut the socket down first: close() alone waits for the reader thread's blocked readline
+    try:
+        context.web_event_sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
     try:
         context.web_event_resp.close()
         context.web_event_conn.close()

@@ -709,3 +709,61 @@ Feature: Web board
     And the output should contain "A note."
     When in web project "alpha" I run "ticket lint"
     Then the exit code should be 0
+
+  # --- Live refresh and search ---
+
+  Scenario: The event stream opens
+    Given the standard web projects
+    And the web server is running
+    When I listen to "/events"
+    Then the response status should be 200
+    And the response header "Content-Type" should contain "text/event-stream"
+    And the first event line should be a comment
+
+  Scenario: A change on disk raises an event
+    Given the standard web projects
+    And the web server is running
+    When I listen to "/events"
+    And web ticket "beta/a-0001" file has "Beta first" replaced by "Beta renamed"
+    Then an event "beta" should arrive within 5 seconds
+
+  Scenario: No event arrives without a change
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    And I listen to "/events"
+    Then no event should arrive within 2 seconds
+
+  Scenario: The server survives a closed event stream
+    Given the standard web projects
+    And the web server is running
+    When I listen to "/events"
+    And I stop listening
+    And web ticket "alpha/a-0001" file has "Open low" replaced by "Renamed low"
+    Then GET "/" should eventually contain "Renamed low"
+    When I listen to "/events"
+    And web ticket "alpha/a-0002" file has "Open high" replaced by "Renamed high"
+    Then an event "alpha" should arrive within 5 seconds
+    When I GET "/"
+    Then the response status should be 200
+
+  Scenario Outline: Board and ticket pages carry the refresh script
+    Given the standard web projects
+    And the web server is running
+    When I GET "<path>"
+    Then the response should contain "new EventSource('/events')"
+    And the main element should not contain the search box
+
+    Examples:
+      | path            |
+      | /               |
+      | /?flat=1        |
+      | /p/alpha        |
+      | /p/alpha/a-0001 |
+
+  Scenario: Every card carries its search text
+    Given the standard web projects
+    And the web server is running
+    When I GET "/"
+    Then every card should have a search text
+    And the response should contain "data-search=\"alpha a-0002 open high\""
