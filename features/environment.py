@@ -32,6 +32,16 @@ def before_scenario(context, scenario):
 
 def after_scenario(context, scenario):
     """Clean up temporary directories after each scenario."""
+    proc = getattr(context, 'web_proc', None)
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except Exception:
+            proc.kill()
+            proc.wait()
+        if proc.stdout:
+            proc.stdout.close()
     if hasattr(context, 'test_dir') and os.path.exists(context.test_dir):
         shutil.rmtree(context.test_dir)
     if hasattr(context, 'plugin_dir') and os.path.exists(context.plugin_dir):
