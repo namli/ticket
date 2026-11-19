@@ -8,9 +8,11 @@ Design: docs/superpowers/specs/2026-11-19-ticket-web-design.md
 """
 
 import argparse
+import hashlib
 import html
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -40,6 +42,7 @@ color = "#3b82f6"
 
 BOARD_CLOSED_LIMIT = 5
 PROJECT_CLOSED_LIMIT = 50
+MAX_FORM_BYTES = 2 * 1024 * 1024
 
 COLUMNS = [('blocked', 'Blocked'), ('ready', 'Ready'),
            ('in_progress', 'In progress'), ('closed', 'Closed')]
@@ -240,6 +243,124 @@ def column_of(ticket: Ticket, blocked: set[str]) -> str:
 
 
 # ============================================================================
+# Editing
+# ============================================================================
+
+EDIT_FIELDS = ('title', 'description', 'design', 'acceptance')
+FIELD_LABELS = {'title': 'Title', 'description': 'Description', 'design': 'Design',
+                'acceptance': 'Acceptance Criteria'}
+SECTION_HEADINGS = {'design': 'Design', 'acceptance': 'Acceptance Criteria'}
+
+
+def normal_text(value: str) -> str:
+    """Normal form of an editable text: LF line ends, no leading or trailing blank lines."""
+    return trim_blank(value.replace('\r\n', '\n').replace('\r', '\n').split('\n'))
+
+
+def normal_title(value: str) -> str:
+    return value.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def edit_hash(title: str, description: str, design: str, acceptance: str) -> str:
+    values = [normal_title(title), normal_text(description), normal_text(design), normal_text(acceptance)]
+    return hashlib.sha256('\0'.join(values).encode('utf-8')).hexdigest()
+
+
+def edit_values(ticket: Ticket) -> dict[str, str]:
+    return {'title': ticket.title, 'description': ticket.description,
+            'design': ticket.design, 'acceptance': ticket.acceptance}
+
+
+def validate_edit(values: dict[str, str], changed: list[str]) -> list[str]:
+    """Check the changed fields only: an untouched field is never a reason to refuse a save."""
+    errors = []
+    for name in changed:
+        value = values[name]
+        if name == 'title':
+            if not value:
+                errors.append('title must not be empty')
+            elif '\n' in value:
+                errors.append('title must be one line')
+            continue
+        for line in value.split('\n'):
+            if line == '---':
+                errors.append(f'{FIELD_LABELS[name]}: a line "---" is not allowed '
+                              '(tk reads it as a front matter marker)')
+                break
+            if line.startswith('## '):
+                errors.append(f'{FIELD_LABELS[name]}: a line that starts with "## " is not allowed '
+                              '(it would start a new section)')
+                break
+    return errors
+
+
+def replace_sections(text: str, description: str | None, design: str | None,
+                     acceptance: str | None) -> str:
+    """Replace the given sections of a ticket file; None leaves a section as it is.
+
+    Works on lines and copies everything else without change: front matter, title line,
+    notes and unknown sections stay byte for byte.
+    """
+    parts = split_file(text)
+    if parts is None:
+        raise ValueError('not a ticket file')
+    _, title_index, bounds = parts
+    lines = text.split('\n')
+    head = lines[:title_index + 1]
+    chunks = [[heading, lines[start:end], False] for heading, start, end in bounds]
+
+    if description is not None:
+        chunks[0][1] = ['', *description.split('\n'), ''] if description else ['']
+        chunks[0][2] = True
+
+    def set_section(heading: str, value: str | None, after: list[str]):
+        if value is None:
+            return
+        index = next((i for i, chunk in enumerate(chunks) if chunk[0] == heading), None)
+        if value == '':
+            if index is not None:
+                del chunks[index]
+                chunks[index - 1][2] = True
+            return
+        body = [f'## {heading}', '', *value.split('\n'), '']
+        if index is not None:
+            chunks[index][1], chunks[index][2] = body, True
+            return
+        position = 1
+        for i, chunk in enumerate(chunks):
+            if chunk[0] in after:
+                position = i + 1
+        previous = chunks[position - 1][1]
+        if previous and previous[-1].strip():
+            previous.append('')
+        chunks.insert(position, [heading, body, True])
+
+    set_section('Design', design, [])
+    set_section('Acceptance Criteria', acceptance, ['Design'])
+
+    out = list(head)
+    for _, chunk_lines, _ in chunks:
+        out += chunk_lines
+    if chunks[-1][2]:               # the last chunk was rewritten: end with exactly one line break
+        while out and not out[-1].strip():
+            out.pop()
+        out.append('')
+    return '\n'.join(out)
+
+
+def write_ticket_file(path: Path, text: str) -> None:
+    """Replace the file in one step. The temp name must not end in .md: tk reads every *.md."""
+    temp = path.with_name(f'.{path.name}.tmp')
+    try:
+        with open(temp, 'w', encoding='utf-8', newline='') as handle:
+            handle.write(text)
+        shutil.copymode(path, temp)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+# ============================================================================
 # Snapshots
 # ============================================================================
 
@@ -335,7 +456,7 @@ def esc(value) -> str:
     return html.escape(str(value), quote=True)
 
 
-def page(app, title: str, main_html: str) -> str:
+def page(app, title: str, main_html: str, script: bool = True) -> str:
     nav = ['<a href="/">Lanes</a>', '<a href="/?flat=1">Flat</a>']
     nav += [f'<a href="/p/{esc(p.name)}">{esc(p.name)}</a>' for p in app.config.projects]
     return (
@@ -519,6 +640,32 @@ def render_ticket(app, project: Project, snapshot: Snapshot, ticket: Ticket) -> 
     return '\n'.join(part for part in out if part)
 
 
+def render_form(project: Project, ticket_id: str, values: dict[str, str], base: str,
+                messages: list[str] | None = None, disk: dict[str, str] | None = None) -> str:
+    """The edit form. disk holds the on-disk text of the fields to show next to the submitted text."""
+    base_url = f'/p/{esc(project.name)}/{esc(ticket_id)}'
+    out = [f'<article class="ticket" style="--pc: {esc(project.color)}">',
+           f'<p class="crumb"><a href="/p/{esc(project.name)}">{esc(project.name)}</a> / '
+           f'<a href="{base_url}">{esc(ticket_id)}</a> / edit</p>']
+    out += [f'<p class="msg">{esc(message)}</p>' for message in messages or []]
+    out.append(f'<form method="post" action="{base_url}/edit">')
+    out.append(f'<input type="hidden" name="base" value="{esc(base)}">')
+    for name in EDIT_FIELDS:
+        out.append(f'<label for="f-{name}">{esc(FIELD_LABELS[name])}</label>')
+        if name == 'title':
+            out.append(f'<input id="f-title" type="text" name="title" value="{esc(values[name])}">')
+        else:
+            rows = max(4, min(30, values[name].count('\n') + 3))
+            # HTML drops one line break right after <textarea>, so emit one of our own first
+            out.append(f'<textarea id="f-{name}" name="{name}" rows="{rows}">\n{esc(values[name])}</textarea>')
+        if disk and name in disk:
+            out.append(f'<p class="disk-label">On disk now:</p>'
+                       f'<pre class="disk" data-field="{name}">{esc(disk[name])}</pre>')
+    out.append(f'<p><button type="submit">Save</button> <a href="{base_url}">Cancel</a></p>')
+    out.append('</form></article>')
+    return '\n'.join(out)
+
+
 def render_project(app, project: Project, show_all: bool) -> str:
     limit = None if show_all else PROJECT_CLOSED_LIMIT
     return render_lane(app, project, limit, f'/p/{project.name}?closed=all')
@@ -580,10 +727,91 @@ class Handler(BaseHTTPRequestHandler):
         allowed = {f'127.0.0.1:{self.app.port}', f'localhost:{self.app.port}'}
         return self.headers.get('Host', '') in allowed
 
+    def origin_allowed(self) -> bool:
+        origin = self.headers.get('Origin')
+        allowed = {f'http://127.0.0.1:{self.app.port}', f'http://localhost:{self.app.port}'}
+        return origin is None or origin in allowed
+
+    def read_form(self) -> dict[str, str] | None:
+        try:
+            length = int(self.headers.get('Content-Length', ''))
+        except ValueError:
+            return None
+        if not 0 <= length <= MAX_FORM_BYTES:
+            return None
+        try:
+            fields = parse_qs(self.rfile.read(length).decode('utf-8'), keep_blank_values=True)
+        except UnicodeDecodeError:
+            return None
+        return {key: values[0] for key, values in fields.items()}
+
+    def edit_get(self, project: Project, ticket: Ticket):
+        values = edit_values(ticket)
+        body = render_form(project, ticket.id, values, edit_hash(**values))
+        self.send_html(200, page(self.app, f'Edit {ticket.id}', body, script=False))
+
+    def edit_post(self, project: Project, ticket: Ticket):
+        app = self.app
+        form = self.read_form()
+        if form is None:
+            self.send_error_page(400, 'Bad form data')
+            return
+        submitted = {'title': normal_title(form.get('title', ''))}
+        for name in ('description', 'design', 'acceptance'):
+            submitted[name] = normal_text(form.get(name, ''))
+
+        def form_page(status: int, messages: list[str], base: str, disk: dict | None = None):
+            body = render_form(project, ticket.id, submitted, base, messages, disk)
+            self.send_html(status, page(app, f'Edit {ticket.id}', body, script=False))
+
+        with app.store.lock(project.name):
+            # the file name comes from the snapshot, never from the URL
+            path = tickets_dir(project) / ticket.file
+            try:
+                current = parse_ticket(path.read_text(encoding='utf-8'), ticket.file)
+            except (OSError, UnicodeDecodeError):
+                current = None
+            if current is None or not current.parsed or current.id != ticket.id:
+                self.send_error_page(404, 'The ticket file is gone')
+                return
+            on_disk = edit_values(current)
+            disk_hash = edit_hash(**on_disk)
+            if disk_hash != form.get('base', ''):
+                differing = {name: on_disk[name] for name in EDIT_FIELDS if on_disk[name] != submitted[name]}
+                form_page(409, ['the ticket changed on disk - compare and save again'], disk_hash, differing)
+                return
+            changed = [name for name in EDIT_FIELDS if submitted[name] != on_disk[name]]
+            errors = validate_edit(submitted, changed)
+            if errors:
+                form_page(400, errors, disk_hash)
+                return
+            if 'title' in changed:
+                result = run_tk(project, 'set', ticket.id, 'title', '--', submitted['title'])
+                if result.returncode != 0:
+                    form_page(400, [f'tk set failed: {(result.stderr or result.stdout).strip()}'], disk_hash)
+                    return
+            if any(name in changed for name in ('description', 'design', 'acceptance')):
+                try:
+                    text = path.read_text(encoding='utf-8')     # tk set may have rewritten the file
+                    write_ticket_file(path, replace_sections(text, *(
+                        submitted[name] if name in changed else None
+                        for name in ('description', 'design', 'acceptance'))))
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    form_page(500, [f'cannot write the ticket: {exc}'], disk_hash)
+                    return
+            app.store.refresh(project.name)
+        self.send_response(303)
+        self.send_header('Location', f'/p/{project.name}/{ticket.id}')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     def dispatch(self, method: str):
         try:
             if not self.host_allowed():
                 self.send_error_page(403, 'Forbidden: unexpected Host header')
+                return
+            if method == 'POST' and not self.origin_allowed():
+                self.send_error_page(403, 'Forbidden: unexpected Origin header')
                 return
             url = urlsplit(self.path)
             query = parse_qs(url.query, keep_blank_values=True)
@@ -607,6 +835,15 @@ class Handler(BaseHTTPRequestHandler):
         if method == 'GET' and project is not None:
             show_all = query.get('closed', [''])[0] == 'all'
             self.send_html(200, page(app, project.name, render_project(app, project, show_all)))
+            return
+        match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)/([^/]+)/edit', path)
+        found = app.ticket(match.group(1), unquote(match.group(2))) if match else None
+        if found is not None:
+            project, _, ticket = found
+            if method == 'GET':
+                self.edit_get(project, ticket)
+            else:
+                self.edit_post(project, ticket)
             return
         match = re.fullmatch(r'/p/([A-Za-z0-9_-]+)/([^/]+)', path)
         found = app.ticket(match.group(1), unquote(match.group(2))) if match else None

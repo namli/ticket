@@ -386,3 +386,326 @@ Feature: Web board
       | /p/alpha/..%2Fweb.toml     |
       | /p/alpha/a-0002/extra      |
       | /p/alpha/nofm-0001         |
+
+  # --- Editing ---
+
+  Scenario: The edit form shows the current text
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    Then the form field "title" should be "First"
+    And the form field "description" should be "Old description."
+    And the form field "design" should be "Old design."
+    And the form field "acceptance" should be ""
+    And the form field "base" should match "[0-9a-f]{64}"
+    And the response should not contain "EventSource"
+
+  Scenario: A description edit changes only the description
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value            |
+      | description | New description. |
+    Then the response status should be 303
+    And the response header "Location" should be "/p/alpha/a-0001"
+    And web ticket "alpha/a-0001" file should be:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # First
+
+      New description.
+
+      ## Design
+
+      Old design.
+
+      ## Notes
+
+      **2026-01-02T00:00:00Z**
+
+      A note.
+      """
+    And no temp file should remain in web project "alpha"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "New description."
+
+  Scenario: A title edit goes through tk set
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field | value   |
+      | title | Renamed |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Renamed"
+    And web ticket "alpha/a-0001" file should contain "Edited: title"
+    And web ticket "alpha/a-0001" file should contain "Old description."
+    And web ticket "alpha/a-0001" file should contain "A note."
+
+  Scenario: A title that starts with a dash saves
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field | value  |
+      | title | -x fix |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# -x fix"
+
+  Scenario: Title and text change in one save
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value     |
+      | title       | Both      |
+      | description | New text. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Both"
+    And web ticket "alpha/a-0001" file should contain "New text."
+    And web ticket "alpha/a-0001" file should contain "Edited: title"
+    And web ticket "alpha/a-0001" file should not contain "Old description."
+
+  Scenario: A new section appears in order
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field      | value     |
+      | acceptance | It works. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "## Acceptance Criteria\n\nIt works.\n\n## Notes"
+    And in web ticket "alpha/a-0001" file "Old design." should come before "## Acceptance Criteria"
+    And web ticket "alpha/a-0001" front matter and notes should be unchanged
+
+  Scenario: An emptied section loses its heading
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field  | value |
+      | design |       |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should not contain "## Design"
+    And web ticket "alpha/a-0001" file should not contain "Old design."
+    And web ticket "alpha/a-0001" file should contain "Old description.\n\n## Notes"
+    And web ticket "alpha/a-0001" front matter and notes should be unchanged
+
+  Scenario: A ticket with a title only gets all three sections
+    Given a web project "alpha"
+    And web ticket "alpha/a-0001" has content:
+      """
+      ---
+      id: a-0001
+      status: open
+      deps: []
+      links: []
+      created: 2026-01-01T00:00:00Z
+      type: task
+      priority: 2
+      ---
+      # Bare
+      """
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value |
+      | description | D.    |
+      | design      | G.    |
+      | acceptance  | A.    |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Bare\n\nD.\n\n## Design\n\nG.\n\n## Acceptance Criteria\n\nA.\n"
+    When in web project "alpha" I run "ticket show a-0001"
+    Then the exit code should be 0
+    And the output should contain "G."
+
+  Scenario: Line breaks from the browser become plain line feeds
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value                |
+      | description | Line one\r\nLine two |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "Line one\nLine two\n\n## Design"
+    And web ticket "alpha/a-0001" file should not contain "\r"
+
+  Scenario: A save without changes writes nothing
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A change on disk stops the save and shows the disk text
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "Old description." replaced by "Agent text."
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 409
+    And web ticket "alpha/a-0001" file should contain "Agent text."
+    And web ticket "alpha/a-0001" file should not contain "Mine."
+    And the response should contain "the ticket changed on disk"
+    And the response should contain "Mine."
+    And the disk text of field "description" should contain "Agent text."
+
+  Scenario: The second save after a conflict succeeds
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "Old description." replaced by "Agent text."
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    And I take the form from the response
+    And I submit the form unchanged
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "Mine."
+    And web ticket "alpha/a-0001" file should not contain "Agent text."
+
+  Scenario: A title changed on disk is a conflict too
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "# First" replaced by "# Agent title"
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 409
+    And the disk text of field "title" should contain "Agent title"
+    And web ticket "alpha/a-0001" file should not contain "Mine."
+
+  Scenario: A note added on disk does not block the save
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And a note "Agent note." is appended to web ticket "alpha/a-0001"
+    And web ticket "alpha/a-0001" file has "status: open" replaced by "status: in_progress"
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "Mine."
+    And web ticket "alpha/a-0001" file should contain "Agent note."
+    And web ticket "alpha/a-0001" file should contain "status: in_progress"
+
+  Scenario Outline: Text that would break the ticket layout is rejected
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field   | value   |
+      | <field> | <value> |
+    Then the response status should be 400
+    And web ticket "alpha/a-0001" file should be unchanged
+    And the response should contain "<shown>"
+
+    Examples:
+      | field       | value         | shown    |
+      | description | a\n---\nb     | ---      |
+      | design      | x\n## Extra   | ## Extra |
+      | acceptance  | ## Notes      | ## Notes |
+      | title       |               | title    |
+      | title       | One\nTwo      | title    |
+
+  Scenario: A line that starts with one hash is accepted
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field  | value                |
+      | design | # install deps\nmake |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "## Design\n\n# install deps\nmake\n"
+    And web ticket "alpha/a-0001" file should contain "# First\n"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "<h1>First</h1>"
+
+  Scenario: A POST from a foreign origin is rejected
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with header "Origin: http://evil.example" and:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 403
+    And web ticket "alpha/a-0001" file should be unchanged
+
+  Scenario: A POST from the page's own origin is accepted
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with header "Origin: http://127.0.0.1:<port>" and:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 303
+
+  Scenario: Russian text saves unchanged
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value              |
+      | title       | Починить поиск     |
+      | description | Описание по-русски |
+    Then the response status should be 303
+    And web ticket "alpha/a-0001" file should contain "# Починить поиск"
+    And web ticket "alpha/a-0001" file should contain "Описание по-русски"
+    When I GET "/p/alpha/a-0001"
+    Then the response should contain "Починить поиск"
+    And the response should contain "Описание по-русски"
+
+  Scenario: A ticket deleted before the save is not found
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And web ticket "alpha/a-0001" is deleted
+    And I submit the form with:
+      | field       | value |
+      | description | Mine. |
+    Then the response status should be 404
+    When I GET "/"
+    Then the response status should be 200
+
+  Scenario: An unparsable ticket has no edit form
+    Given the web project with an editable ticket
+    And web ticket "alpha/nofm-0001" has content:
+      """
+      just text
+      """
+    And the web server is running
+    When I GET "/p/alpha/nofm-0001/edit"
+    Then the response status should be 404
+    When I GET "/p/alpha/zzz/edit"
+    Then the response status should be 404
+
+  Scenario: Core commands read an edited ticket
+    Given the web project with an editable ticket
+    And the web server is running
+    When I open the edit form of "alpha/a-0001"
+    And I submit the form with:
+      | field       | value            |
+      | description | New description. |
+      | design      | New design.      |
+      | acceptance  | New acceptance.  |
+    And in web project "alpha" I run "ticket show a-0001"
+    Then the exit code should be 0
+    And the output should contain "New description."
+    And the output should contain "New design."
+    And the output should contain "New acceptance."
+    And the output should contain "A note."
+    When in web project "alpha" I run "ticket lint"
+    Then the exit code should be 0

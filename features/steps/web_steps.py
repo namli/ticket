@@ -322,6 +322,38 @@ def step_full_ticket_project(context):
     ticket_file(context, 'alpha/a-0002').write_text(FULL_TICKET, encoding='utf-8')
 
 
+EDITABLE_TICKET = """---
+id: a-0001
+status: open
+deps: []
+links: []
+created: 2026-01-01T00:00:00Z
+type: task
+priority: 2
+---
+# First
+
+Old description.
+
+## Design
+
+Old design.
+
+## Notes
+
+**2026-01-02T00:00:00Z**
+
+A note.
+"""
+
+
+@given(r'the web project with an editable ticket')
+def step_editable_project(context):
+    (project_dir(context, 'alpha') / '.tickets').mkdir(parents=True)
+    register_project(context, 'alpha')
+    ticket_file(context, 'alpha/a-0001').write_text(EDITABLE_TICKET, encoding='utf-8')
+
+
 @given(r'web project "(?P<name>[^"]+)" has (?P<count>\d+) closed tickets')
 def step_web_closed_tickets(context, name, count):
     for i in range(1, int(count) + 1):
